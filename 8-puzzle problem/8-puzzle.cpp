@@ -4,6 +4,7 @@
 #include <queue>
 #include <array>
 #include <unordered_set>
+#include <stack>
 
 #define SIZE 3
 #define SPACE '0'
@@ -193,44 +194,68 @@ void bfs()
 std::vector<PuzzleBoard> dfsAnswer;
 int dfsDepth = INF;
 
-void dfs(PuzzleBoard current, int depth, std::vector<PuzzleBoard> result)
+// Structure to store DFS state information
+struct DFSState
 {
-    if (depth > MAX_DEPTH)
+    PuzzleBoard board;
+    int depth;
+    std::vector<PuzzleBoard> path;
+
+    DFSState(PuzzleBoard b, int d, std::vector<PuzzleBoard> p)
+        : board(b), depth(d), path(p) {}
+};
+
+void dfs(PuzzleBoard initial)
+{
+    std::stack<DFSState> dfsStack;
+    std::vector<PuzzleBoard> initialPath;
+    initialPath.push_back(initial);
+    dfsStack.push(DFSState(initial, 0, initialPath));
+
+    while (!dfsStack.empty())
     {
-        return;
-    }
-    if (depth > dfsDepth)
-    {
-        return;
-    }
-    std::string boardString = current.getBoardString();
-    result.push_back(current);
-    if (current.isGoal())
-    {
-        if (result.size() < dfsDepth)
+        DFSState current = dfsStack.top();
+        dfsStack.pop();
+
+        if (current.depth > MAX_DEPTH)
         {
-            dfsDepth = depth;
-            dfsAnswer = result;
+            continue;
         }
-        return;
-    }
-    for (int i = 0; i < 4; i++)
-    {
-        PuzzleBoard child = current;
-        if ((child.*moveFunction[i])())
+        if (current.depth > dfsDepth)
         {
-            boardString = child.getBoardString();
-            if (visited.find(boardString) != visited.end())
+            continue;
+        }
+
+        if (current.board.isGoal())
+        {
+            if (current.path.size() < dfsDepth)
             {
-                continue;
+                dfsDepth = current.depth;
+                dfsAnswer = current.path;
             }
-            visited.insert(boardString);
-            dfs(child, depth + 1, result);
-            visited.erase(boardString);
+            continue;
+        }
+
+        for (int i = 0; i < 4; i++)
+        {
+            PuzzleBoard child = current.board;
+            if ((child.*moveFunction[i])())
+            {
+                std::string boardString = child.getBoardString();
+                if (visited.find(boardString) != visited.end())
+                {
+                    continue;
+                }
+                visited.insert(boardString);
+
+                std::vector<PuzzleBoard> newPath = current.path;
+                newPath.push_back(child);
+                dfsStack.push(DFSState(child, current.depth + 1, newPath));
+
+                visited.erase(boardString);
+            }
         }
     }
-    result.pop_back();
-    return;
 }
 
 int main()
@@ -252,8 +277,7 @@ int main()
     t++;
     bfs();
     visited.clear();
-    std::vector<PuzzleBoard> result;
-    dfs(initPuzzleBoard, 0, result);
+    dfs(initPuzzleBoard);
     for (int i = 0; i < dfsAnswer.size(); i++)
     {
         printf("step %d:\n", i + 1);
