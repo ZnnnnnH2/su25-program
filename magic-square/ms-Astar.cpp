@@ -328,171 +328,17 @@ public:
     }
 };
 
-struct Node
+
+void AStar(MagicSquare &ms)
 {
-    MagicSquare ms;
-    int father;
-    int op;
-    bool clockWise;
-    int depth;
-};
-
-std::vector<Node> nodes;
-std::queue<int> q;
-std::unordered_set<std::string> visited;
-void printPath(int goalIdx)
-{
-    std::vector<Node> path;
-    for (int i = goalIdx; i != -1; i = nodes[i].father)
-    {
-        if (nodes[i].father != -1)
-            path.push_back(nodes[i]);
-    }
-    std::reverse(path.begin(), path.end());
-    for (auto node : path)
-        printf("%d%c ", node.op, node.clockWise ? '+' : '-');
-}
-void bfs(MagicSquare head)
-{
-    nodes.clear();
-    visited.clear();
-    while (!q.empty())
-        q.pop();
-    nodes.push_back({head, -1, -1, false, 0});
-    visited.insert(head.state());
-    q.push(0);
-    while (!q.empty())
-    {
-        int index = q.front();
-        // printf("Visiting node %d\n", index);
-        q.pop();
-        Node current = nodes[index];
-        if (current.ms.check())
-        {
-            printPath(index);
-            return;
-        }
-        for (int i = 0; i < 9; i++)
-        {
-            for (int j = 0; j < 2; j++)
-            {
-                MagicSquare newMs = current.ms;
-                newMs.rotate(i, j == 1);
-                std::string state = newMs.state();
-                if (visited.find(state) == visited.end())
-                {
-                    visited.insert(state);
-                    nodes.push_back({newMs, index, i, j == 1, current.depth + 1});
-                    q.push(nodes.size() - 1);
-                }
-            }
-        }
-    }
-}
-
-void iddfs(MagicSquare head)
-{
-    for (int maxDepth = 0; maxDepth <= 20; maxDepth++) // 限制最大深度避免无限搜索
-    {
-        nodes.clear();
-        std::stack<int> st;
-        nodes.push_back({head, -1, -1, false, 0});
-        st.push(0);
-
-        while (!st.empty())
-        {
-            int index = st.top();
-            st.pop();
-            Node current = nodes[index];
-
-            if (current.ms.check())
-            {
-                printPath(index);
-                return;
-            }
-
-            if (current.depth < maxDepth) // 只有在深度小于限制时才扩展
-            {
-                for (int i = 8; i >= 0; --i)
-                {
-                    for (int j = 1; j >= 0; --j)
-                    {
-                        MagicSquare newMs = current.ms;
-                        newMs.rotate(i, j == 1);
-
-                        // 检查路径中是否有循环（而不是全局状态）
-                        bool inCurrentPath = false;
-                        std::string newState = newMs.state();
-                        for (int pathIdx = index; pathIdx != -1; pathIdx = nodes[pathIdx].father)
-                        {
-                            if (nodes[pathIdx].ms.state() == newState)
-                            {
-                                inCurrentPath = true;
-                                break;
-                            }
-                        }
-
-                        if (!inCurrentPath)
-                        {
-                            nodes.push_back({newMs, index, i, j == 1, current.depth + 1});
-                            st.push(nodes.size() - 1);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// 带深度限制的深度优先搜索
-void dfs(MagicSquare head, int maxDepth = 10)
-{
-    nodes.clear();
-    visited.clear();
-    std::stack<int> st;
-    nodes.push_back({head, -1, -1, false, 0});
-    visited.insert(head.state());
-    st.push(0);
-
-    while (!st.empty())
-    {
-        int index = st.top();
-        st.pop();
-        Node current = nodes[index];
-
-        if (current.ms.check())
-        {
-            printPath(index);
-            return;
-        }
-
-        // 只有在深度小于限制时才扩展
-        if (current.depth < maxDepth)
-        {
-            // 按相反顺序压栈，使得较小编号的操作先被探索
-            for (int i = 8; i >= 0; --i)
-            {
-                for (int j = 1; j >= 0; --j)
-                {
-                    MagicSquare newMs = current.ms;
-                    newMs.rotate(i, j == 1);
-                    std::string state = newMs.state();
-                    if (visited.find(state) == visited.end())
-                    {
-                        visited.insert(state);
-                        nodes.push_back({newMs, index, i, j == 1, current.depth + 1});
-                        st.push(nodes.size() - 1);
-                    }
-                }
-            }
-        }
-    }
+    // A* algorithm implementation
+    
 }
 
 int main()
 {
-    freopen("2.in", "r", stdin);
-    freopen("2.out", "w", stdout);
+    freopen("4.in", "r", stdin);
+    freopen("4.out", "w", stdout);
 
     reflaction['b'] = 0;
     reflaction['d'] = 1;
@@ -503,15 +349,5 @@ int main()
     MagicSquare ms;
     ms.readIn();
     ms.print();
-    // 3- 6+ 4- 7+ 1-
-    // ms.rotate(3, false);
-    // ms.rotate(6, true);
-    // ms.rotate(4, false);
-    // ms.rotate(7, true);
-    // ms.rotate(1, false);
-    // ms.print();
-    // bfs(ms);
-    dfs(ms);
-    // iddfs(ms);
     return 0;
 }

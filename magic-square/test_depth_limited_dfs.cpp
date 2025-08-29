@@ -21,33 +21,21 @@ private:
 
 public:
     MagicSquare() {}
-    void readIn()
+
+    void createSolvedCube()
     {
         for (int i = 0; i < 6; i++)
         {
-            char c;
-            do
-            {
-                int t = scanf("%c", &c);
-                if (t == -1)
-                {
-                    printf("EOF encountered, t = %d\n", t);
-                    return;
-                }
-            } while (c != 'b' && c != 'd' && c != 'f' && c != 'l' && c != 'r' && c != 'u');
-            // putchar(c);
-            // putchar('\n');
-            int index = reflaction[c];
-            scanf("%*s");
             for (int j = 0; j < SIZE; j++)
             {
                 for (int k = 0; k < SIZE; k++)
                 {
-                    scanf(" %c", &magicSquare[index][j][k]);
+                    magicSquare[i][j][k] = '0' + i;
                 }
             }
         }
     }
+
     void print()
     {
         int order[4][3] = {
@@ -56,7 +44,6 @@ public:
             {-1, 2, -1},
             {-1, 1, -1}};
 
-        // Print the magic square layout according to order array
         for (int i = 0; i < 4; i++)
         {
             for (int row = 0; row < SIZE; row++)
@@ -65,12 +52,10 @@ public:
                 {
                     if (order[i][j] == -1)
                     {
-                        // Print empty space
                         printf("     ");
                     }
                     else
                     {
-                        // Print the face
                         int faceIndex = order[i][j];
                         for (int col = 0; col < SIZE; col++)
                         {
@@ -82,10 +67,10 @@ public:
                 printf("\n");
             }
             if (i < 3)
-                printf("\n"); // Add spacing between rows
+                printf("\n");
         }
     }
-    // 顺时针旋转 90°
+
     Square rotateCW(const Square &a)
     {
         Square b{};
@@ -95,7 +80,6 @@ public:
         return b;
     }
 
-    // 逆时针旋转 90°
     Square rotateCCW(const Square &a)
     {
         Square b{};
@@ -116,7 +100,8 @@ public:
             magicSquare[index] = rotateCCW(magicSquare[index]);
         }
     }
-    void rotate0521(int mun, bool clockwise) // 012
+
+    void rotate0521(int mun, bool clockwise)
     {
         int order[] = {0, 5, 2, 1, 0};
         if (!clockwise)
@@ -144,7 +129,6 @@ public:
             }
             temp1 = temp2;
         }
-        // std::reverse(temp1.begin(), temp1.end());
         for (int i = 0; i < SIZE; i++)
         {
             magicSquare[order[0]][i][mun] = temp1[i];
@@ -158,7 +142,8 @@ public:
             rotateFace(4, !clockwise);
         }
     }
-    void rotate2304(int mun, bool clockwise) // 345
+
+    void rotate2304(int mun, bool clockwise)
     {
         int order[] = {2, 3, 0, 4, 2};
         if (!clockwise)
@@ -226,7 +211,8 @@ public:
             rotateFace(5, clockwise);
         }
     }
-    void rotate1354(int mun, bool clockwise) // 678
+
+    void rotate1354(int mun, bool clockwise)
     {
         int order[] = {1, 3, 5, 4, 1};
         if (!clockwise)
@@ -272,7 +258,8 @@ public:
             rotateFace(0, !clockwise);
         }
     }
-    void rotate(int mun, bool clockwise) // 1 for + 0 for -
+
+    void rotate(int mun, bool clockwise)
     {
         switch (mun)
         {
@@ -293,6 +280,7 @@ public:
             break;
         }
     }
+
     bool check()
     {
         for (int i = 0; i < 6; i++)
@@ -310,10 +298,10 @@ public:
         }
         return true;
     }
+
     std::string state()
     {
         std::string str;
-
         for (int f = 0; f < 6; f++)
         {
             for (int r = 0; r < SIZE; r++)
@@ -338,8 +326,8 @@ struct Node
 };
 
 std::vector<Node> nodes;
-std::queue<int> q;
 std::unordered_set<std::string> visited;
+
 void printPath(int goalIdx)
 {
     std::vector<Node> path;
@@ -349,104 +337,16 @@ void printPath(int goalIdx)
             path.push_back(nodes[i]);
     }
     std::reverse(path.begin(), path.end());
+    printf("Solution: ");
     for (auto node : path)
         printf("%d%c ", node.op, node.clockWise ? '+' : '-');
-}
-void bfs(MagicSquare head)
-{
-    nodes.clear();
-    visited.clear();
-    while (!q.empty())
-        q.pop();
-    nodes.push_back({head, -1, -1, false, 0});
-    visited.insert(head.state());
-    q.push(0);
-    while (!q.empty())
-    {
-        int index = q.front();
-        // printf("Visiting node %d\n", index);
-        q.pop();
-        Node current = nodes[index];
-        if (current.ms.check())
-        {
-            printPath(index);
-            return;
-        }
-        for (int i = 0; i < 9; i++)
-        {
-            for (int j = 0; j < 2; j++)
-            {
-                MagicSquare newMs = current.ms;
-                newMs.rotate(i, j == 1);
-                std::string state = newMs.state();
-                if (visited.find(state) == visited.end())
-                {
-                    visited.insert(state);
-                    nodes.push_back({newMs, index, i, j == 1, current.depth + 1});
-                    q.push(nodes.size() - 1);
-                }
-            }
-        }
-    }
-}
-
-void iddfs(MagicSquare head)
-{
-    for (int maxDepth = 0; maxDepth <= 20; maxDepth++) // 限制最大深度避免无限搜索
-    {
-        nodes.clear();
-        std::stack<int> st;
-        nodes.push_back({head, -1, -1, false, 0});
-        st.push(0);
-
-        while (!st.empty())
-        {
-            int index = st.top();
-            st.pop();
-            Node current = nodes[index];
-
-            if (current.ms.check())
-            {
-                printPath(index);
-                return;
-            }
-
-            if (current.depth < maxDepth) // 只有在深度小于限制时才扩展
-            {
-                for (int i = 8; i >= 0; --i)
-                {
-                    for (int j = 1; j >= 0; --j)
-                    {
-                        MagicSquare newMs = current.ms;
-                        newMs.rotate(i, j == 1);
-
-                        // 检查路径中是否有循环（而不是全局状态）
-                        bool inCurrentPath = false;
-                        std::string newState = newMs.state();
-                        for (int pathIdx = index; pathIdx != -1; pathIdx = nodes[pathIdx].father)
-                        {
-                            if (nodes[pathIdx].ms.state() == newState)
-                            {
-                                inCurrentPath = true;
-                                break;
-                            }
-                        }
-
-                        if (!inCurrentPath)
-                        {
-                            nodes.push_back({newMs, index, i, j == 1, current.depth + 1});
-                            st.push(nodes.size() - 1);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    printf("(depth: %zu)\n", path.size());
 }
 
 // 带深度限制的深度优先搜索
-void dfs(MagicSquare head, int maxDepth = 10)
+void dfs(MagicSquare head, int maxDepth = 20)
 {
+    printf("Testing DFS with depth limit %d...\n", maxDepth);
     nodes.clear();
     visited.clear();
     std::stack<int> st;
@@ -454,15 +354,19 @@ void dfs(MagicSquare head, int maxDepth = 10)
     visited.insert(head.state());
     st.push(0);
 
+    int nodesExplored = 0;
     while (!st.empty())
     {
         int index = st.top();
         st.pop();
         Node current = nodes[index];
+        nodesExplored++;
 
         if (current.ms.check())
         {
+            printf("DFS: Solution found!\n");
             printPath(index);
+            printf("Nodes explored: %d\n", nodesExplored);
             return;
         }
 
@@ -487,31 +391,52 @@ void dfs(MagicSquare head, int maxDepth = 10)
             }
         }
     }
+
+    printf("DFS: No solution found within depth %d. Nodes explored: %d\n", maxDepth, nodesExplored);
+}
+
+void testDepthLimitedDFS()
+{
+    printf("=== Testing Depth-Limited DFS ===\n");
+
+    // 测试案例1：简单的一步解决方案
+    MagicSquare test1;
+    test1.createSolvedCube();
+    test1.rotate(0, true);
+
+    printf("\nTest 1: One-step solution\n");
+    test1.print();
+    printf("\n");
+
+    dfs(test1, 3);
+
+    // 测试案例2：两步解决方案
+    MagicSquare test2;
+    test2.createSolvedCube();
+    test2.rotate(0, true);
+    test2.rotate(3, false);
+
+    printf("\nTest 2: Two-step solution\n");
+    test2.print();
+    printf("\n");
+
+    printf("Testing with depth limit 1 (should not find solution):\n");
+    dfs(test2, 1);
+
+    printf("\nTesting with depth limit 3 (should find solution):\n");
+    dfs(test2, 3);
 }
 
 int main()
 {
-    freopen("2.in", "r", stdin);
-    freopen("2.out", "w", stdout);
-
     reflaction['b'] = 0;
     reflaction['d'] = 1;
     reflaction['f'] = 2;
     reflaction['l'] = 3;
     reflaction['r'] = 4;
     reflaction['u'] = 5;
-    MagicSquare ms;
-    ms.readIn();
-    ms.print();
-    // 3- 6+ 4- 7+ 1-
-    // ms.rotate(3, false);
-    // ms.rotate(6, true);
-    // ms.rotate(4, false);
-    // ms.rotate(7, true);
-    // ms.rotate(1, false);
-    // ms.print();
-    // bfs(ms);
-    dfs(ms);
-    // iddfs(ms);
+
+    testDepthLimitedDFS();
+
     return 0;
 }

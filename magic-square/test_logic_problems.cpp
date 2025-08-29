@@ -6,6 +6,8 @@
 #include <array>
 #include <stack>
 #include <queue>
+#include <chrono>
+#include <set>
 
 #define SIZE 3
 
@@ -21,33 +23,21 @@ private:
 
 public:
     MagicSquare() {}
-    void readIn()
+
+    void createSolvedCube()
     {
         for (int i = 0; i < 6; i++)
         {
-            char c;
-            do
-            {
-                int t = scanf("%c", &c);
-                if (t == -1)
-                {
-                    printf("EOF encountered, t = %d\n", t);
-                    return;
-                }
-            } while (c != 'b' && c != 'd' && c != 'f' && c != 'l' && c != 'r' && c != 'u');
-            // putchar(c);
-            // putchar('\n');
-            int index = reflaction[c];
-            scanf("%*s");
             for (int j = 0; j < SIZE; j++)
             {
                 for (int k = 0; k < SIZE; k++)
                 {
-                    scanf(" %c", &magicSquare[index][j][k]);
+                    magicSquare[i][j][k] = '0' + i;
                 }
             }
         }
     }
+
     void print()
     {
         int order[4][3] = {
@@ -56,7 +46,6 @@ public:
             {-1, 2, -1},
             {-1, 1, -1}};
 
-        // Print the magic square layout according to order array
         for (int i = 0; i < 4; i++)
         {
             for (int row = 0; row < SIZE; row++)
@@ -65,12 +54,10 @@ public:
                 {
                     if (order[i][j] == -1)
                     {
-                        // Print empty space
                         printf("     ");
                     }
                     else
                     {
-                        // Print the face
                         int faceIndex = order[i][j];
                         for (int col = 0; col < SIZE; col++)
                         {
@@ -82,10 +69,10 @@ public:
                 printf("\n");
             }
             if (i < 3)
-                printf("\n"); // Add spacing between rows
+                printf("\n");
         }
     }
-    // 顺时针旋转 90°
+
     Square rotateCW(const Square &a)
     {
         Square b{};
@@ -95,7 +82,6 @@ public:
         return b;
     }
 
-    // 逆时针旋转 90°
     Square rotateCCW(const Square &a)
     {
         Square b{};
@@ -116,7 +102,8 @@ public:
             magicSquare[index] = rotateCCW(magicSquare[index]);
         }
     }
-    void rotate0521(int mun, bool clockwise) // 012
+
+    void rotate0521(int mun, bool clockwise)
     {
         int order[] = {0, 5, 2, 1, 0};
         if (!clockwise)
@@ -144,7 +131,6 @@ public:
             }
             temp1 = temp2;
         }
-        // std::reverse(temp1.begin(), temp1.end());
         for (int i = 0; i < SIZE; i++)
         {
             magicSquare[order[0]][i][mun] = temp1[i];
@@ -158,7 +144,8 @@ public:
             rotateFace(4, !clockwise);
         }
     }
-    void rotate2304(int mun, bool clockwise) // 345
+
+    void rotate2304(int mun, bool clockwise)
     {
         int order[] = {2, 3, 0, 4, 2};
         if (!clockwise)
@@ -226,7 +213,8 @@ public:
             rotateFace(5, clockwise);
         }
     }
-    void rotate1354(int mun, bool clockwise) // 678
+
+    void rotate1354(int mun, bool clockwise)
     {
         int order[] = {1, 3, 5, 4, 1};
         if (!clockwise)
@@ -272,7 +260,8 @@ public:
             rotateFace(0, !clockwise);
         }
     }
-    void rotate(int mun, bool clockwise) // 1 for + 0 for -
+
+    void rotate(int mun, bool clockwise)
     {
         switch (mun)
         {
@@ -293,6 +282,7 @@ public:
             break;
         }
     }
+
     bool check()
     {
         for (int i = 0; i < 6; i++)
@@ -310,10 +300,10 @@ public:
         }
         return true;
     }
-    std::string state()
+
+    std::string state() const
     {
         std::string str;
-
         for (int f = 0; f < 6; f++)
         {
             for (int r = 0; r < SIZE; r++)
@@ -325,6 +315,11 @@ public:
             }
         }
         return str;
+    }
+
+    bool operator==(const MagicSquare &other) const
+    {
+        return this->state() == other.state();
     }
 };
 
@@ -340,6 +335,7 @@ struct Node
 std::vector<Node> nodes;
 std::queue<int> q;
 std::unordered_set<std::string> visited;
+
 void printPath(int goalIdx)
 {
     std::vector<Node> path;
@@ -349,29 +345,47 @@ void printPath(int goalIdx)
             path.push_back(nodes[i]);
     }
     std::reverse(path.begin(), path.end());
+    printf("Solution found with %zu steps: ", path.size());
     for (auto node : path)
         printf("%d%c ", node.op, node.clockWise ? '+' : '-');
+    printf("\n");
 }
-void bfs(MagicSquare head)
+
+// 原始的 BFS 实现（来自 ms.cpp）
+bool original_bfs(MagicSquare head, int maxSteps = 15)
 {
     nodes.clear();
     visited.clear();
     while (!q.empty())
         q.pop();
+
     nodes.push_back({head, -1, -1, false, 0});
     visited.insert(head.state());
     q.push(0);
+
+    printf("Starting original BFS...\n");
+    int nodesExplored = 0;
+
     while (!q.empty())
     {
         int index = q.front();
-        // printf("Visiting node %d\n", index);
         q.pop();
         Node current = nodes[index];
+        nodesExplored++;
+
         if (current.ms.check())
         {
+            printf("Original BFS: Solution found!\n");
             printPath(index);
-            return;
+            printf("Nodes explored: %d\n", nodesExplored);
+            return true;
         }
+
+        if (current.depth >= maxSteps)
+        {
+            continue;
+        }
+
         for (int i = 0; i < 9; i++)
         {
             for (int j = 0; j < 2; j++)
@@ -388,30 +402,105 @@ void bfs(MagicSquare head)
             }
         }
     }
+
+    printf("Original BFS: No solution found. Nodes explored: %d\n", nodesExplored);
+    return false;
 }
 
-void iddfs(MagicSquare head)
+// 原始的 IDS 实现（来自 ms.cpp）- 发现了问题！
+bool original_ids(MagicSquare head, int maxDepth = 15)
 {
-    for (int maxDepth = 0; maxDepth <= 20; maxDepth++) // 限制最大深度避免无限搜索
+    printf("Starting original IDS...\n");
+
+    for (int depth = 0; depth <= maxDepth; depth++)
     {
+        printf("IDS: Trying depth %d\n", depth);
+
         nodes.clear();
+        visited.clear(); // 这是一个问题！IDS 每次迭代都清除 visited
         std::stack<int> st;
+
         nodes.push_back({head, -1, -1, false, 0});
+        visited.insert(head.state()); // 这也是问题！visited 应该检测路径循环，不是全局状态
         st.push(0);
+
+        int nodesExplored = 0;
 
         while (!st.empty())
         {
             int index = st.top();
             st.pop();
             Node current = nodes[index];
+            nodesExplored++;
 
             if (current.ms.check())
             {
+                printf("Original IDS: Solution found at depth %d!\n", depth);
                 printPath(index);
-                return;
+                printf("Nodes explored this iteration: %d\n", nodesExplored);
+                return true;
             }
 
-            if (current.depth < maxDepth) // 只有在深度小于限制时才扩展
+            if (current.depth < depth)
+            {
+                for (int i = 8; i >= 0; --i)
+                {
+                    for (int j = 1; j >= 0; --j)
+                    {
+                        MagicSquare newMs = current.ms;
+                        newMs.rotate(i, j == 1);
+                        std::string state = newMs.state();
+                        if (visited.find(state) == visited.end()) // 这个检查是错误的！
+                        {
+                            visited.insert(state);
+                            nodes.push_back({newMs, index, i, j == 1, current.depth + 1});
+                            st.push(nodes.size() - 1);
+                        }
+                    }
+                }
+            }
+        }
+
+        printf("IDS: Depth %d completed, explored %d nodes\n", depth, nodesExplored);
+    }
+
+    printf("Original IDS: No solution found\n");
+    return false;
+}
+
+// 修正的 IDS 实现
+bool corrected_ids(MagicSquare head, int maxDepth = 15)
+{
+    printf("Starting corrected IDS...\n");
+
+    for (int depth = 0; depth <= maxDepth; depth++)
+    {
+        printf("Corrected IDS: Trying depth %d\n", depth);
+
+        nodes.clear();
+        std::stack<int> st;
+
+        nodes.push_back({head, -1, -1, false, 0});
+        st.push(0);
+
+        int nodesExplored = 0;
+
+        while (!st.empty())
+        {
+            int index = st.top();
+            st.pop();
+            Node current = nodes[index];
+            nodesExplored++;
+
+            if (current.ms.check())
+            {
+                printf("Corrected IDS: Solution found at depth %d!\n", depth);
+                printPath(index);
+                printf("Nodes explored this iteration: %d\n", nodesExplored);
+                return true;
+            }
+
+            if (current.depth < depth)
             {
                 for (int i = 8; i >= 0; --i)
                 {
@@ -421,18 +510,18 @@ void iddfs(MagicSquare head)
                         newMs.rotate(i, j == 1);
 
                         // 检查路径中是否有循环（而不是全局状态）
-                        bool inCurrentPath = false;
+                        bool inPath = false;
                         std::string newState = newMs.state();
                         for (int pathIdx = index; pathIdx != -1; pathIdx = nodes[pathIdx].father)
                         {
                             if (nodes[pathIdx].ms.state() == newState)
                             {
-                                inCurrentPath = true;
+                                inPath = true;
                                 break;
                             }
                         }
 
-                        if (!inCurrentPath)
+                        if (!inPath)
                         {
                             nodes.push_back({newMs, index, i, j == 1, current.depth + 1});
                             st.push(nodes.size() - 1);
@@ -441,77 +530,82 @@ void iddfs(MagicSquare head)
                 }
             }
         }
+
+        printf("Corrected IDS: Depth %d completed, explored %d nodes\n", depth, nodesExplored);
+    }
+
+    printf("Corrected IDS: No solution found\n");
+    return false;
+}
+
+void testRotationInversion()
+{
+    printf("\n=== Testing Rotation Inversion ===\n");
+
+    MagicSquare original;
+    original.createSolvedCube();
+
+    for (int op = 0; op < 9; op++)
+    {
+        MagicSquare test = original;
+        test.rotate(op, true);  // 正向旋转
+        test.rotate(op, false); // 反向旋转
+
+        if (test.state() == original.state())
+        {
+            printf("✓ Operation %d: rotation inversion works\n", op);
+        }
+        else
+        {
+            printf("✗ Operation %d: rotation inversion FAILED\n", op);
+            printf("Original state: %s\n", original.state().c_str());
+            printf("After +/-:      %s\n", test.state().c_str());
+        }
     }
 }
 
-// 带深度限制的深度优先搜索
-void dfs(MagicSquare head, int maxDepth = 10)
+void testComplexCase()
 {
-    nodes.clear();
-    visited.clear();
-    std::stack<int> st;
-    nodes.push_back({head, -1, -1, false, 0});
-    visited.insert(head.state());
-    st.push(0);
+    printf("\n=== Testing Complex Case ===\n");
 
-    while (!st.empty())
-    {
-        int index = st.top();
-        st.pop();
-        Node current = nodes[index];
+    MagicSquare complex;
+    complex.createSolvedCube();
 
-        if (current.ms.check())
-        {
-            printPath(index);
-            return;
-        }
+    // 创建一个需要多步解决的情况
+    complex.rotate(0, true);
+    complex.rotate(3, false);
+    complex.rotate(6, true);
 
-        // 只有在深度小于限制时才扩展
-        if (current.depth < maxDepth)
-        {
-            // 按相反顺序压栈，使得较小编号的操作先被探索
-            for (int i = 8; i >= 0; --i)
-            {
-                for (int j = 1; j >= 0; --j)
-                {
-                    MagicSquare newMs = current.ms;
-                    newMs.rotate(i, j == 1);
-                    std::string state = newMs.state();
-                    if (visited.find(state) == visited.end())
-                    {
-                        visited.insert(state);
-                        nodes.push_back({newMs, index, i, j == 1, current.depth + 1});
-                        st.push(nodes.size() - 1);
-                    }
-                }
-            }
-        }
-    }
+    printf("Complex test case (3 moves from solved):\n");
+    complex.print();
+    printf("Is solved: %s\n", complex.check() ? "Yes" : "No");
+
+    printf("\nTesting with original BFS:\n");
+    bool bfs_result = original_bfs(complex, 6);
+
+    printf("\nTesting with original IDS:\n");
+    bool ids_result = original_ids(complex, 6);
+
+    printf("\nTesting with corrected IDS:\n");
+    bool corrected_ids_result = corrected_ids(complex, 6);
+
+    printf("\n=== Complex Case Results ===\n");
+    printf("Original BFS: %s\n", bfs_result ? "Found solution" : "No solution");
+    printf("Original IDS: %s\n", ids_result ? "Found solution" : "No solution");
+    printf("Corrected IDS: %s\n", corrected_ids_result ? "Found solution" : "No solution");
 }
 
 int main()
 {
-    freopen("2.in", "r", stdin);
-    freopen("2.out", "w", stdout);
-
     reflaction['b'] = 0;
     reflaction['d'] = 1;
     reflaction['f'] = 2;
     reflaction['l'] = 3;
     reflaction['r'] = 4;
     reflaction['u'] = 5;
-    MagicSquare ms;
-    ms.readIn();
-    ms.print();
-    // 3- 6+ 4- 7+ 1-
-    // ms.rotate(3, false);
-    // ms.rotate(6, true);
-    // ms.rotate(4, false);
-    // ms.rotate(7, true);
-    // ms.rotate(1, false);
-    // ms.print();
-    // bfs(ms);
-    dfs(ms);
-    // iddfs(ms);
+
+    testRotationInversion();
+    testComplexCase();
+
     return 0;
 }

@@ -6,7 +6,7 @@ using namespace std;
 #define private public
 #define protected public
 #define main dont_use_main_in_ms
-#include "ms2.cpp"
+#include "ms.cpp"
 #undef main
 #undef private
 #undef protected
