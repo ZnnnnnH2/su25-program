@@ -4,7 +4,9 @@
 #include <queue>
 #include <array>
 #include <unordered_set>
-#include <stack>
+#include <unordered_map>
+#include <limits>
+#include <stdexcept>
 
 #define SIZE 3
 #define SPACE '0'
@@ -15,16 +17,13 @@ typedef std::array<std::array<char, SIZE>, SIZE> Board;
 const int positions[8][2] = {{0, 0}, {0, 1}, {0, 2}, {1, 2}, {2, 2}, {2, 1}, {2, 0}, {1, 0}};
 const char expected[8] = {'1', '2', '3', '4', '5', '6', '7', '8'};
 
-class PuzzleBoard
+struct PuzzleBoard
 {
-private:
     Board board{};
     int size;
     int blank_row;
     int blank_col;
     int father;
-
-public:
     PuzzleBoard()
     {
         this->size = SIZE;
@@ -137,122 +136,124 @@ public:
         }
         return boardString;
     }
+
+    bool operator<(const PuzzleBoard &other) const
+    {
+        return board < other.board;
+    }
 };
 
-std::unordered_set<std::string> visited;
+std::unordered_map<std::string, int> visited; // Store best cost to reach each state
 
-bool (PuzzleBoard::*moveFunction[4])() = {PuzzleBoard::moveUP, PuzzleBoard::moveDOWN, PuzzleBoard::moveLEFT, PuzzleBoard::moveRIGHT};
-
-std::vector<PuzzleBoard> chessVector;
+bool (PuzzleBoard::*moveFunction[4])() = {
+    &PuzzleBoard::moveUP,
+    &PuzzleBoard::moveDOWN,
+    &PuzzleBoard::moveLEFT,
+    &PuzzleBoard::moveRIGHT};
 int h = 0, t = 0;
 
-int printPath(int index)
+struct AStarNode
 {
-    if (index == -1)
-    {
-        return 1;
-    }
-    int step = printPath(chessVector[index].getFather());
-    printf("step %d:\n", step);
-    chessVector[index].printBoard();
-    printf("\n");
-    return step + 1;
-}
-
-void bfs()
-{
-    while (h < t)
-    {
-        PuzzleBoard current = chessVector[h];
-        std::string boardString = current.getBoardString();
-        if (visited.find(boardString) != visited.end())
-        {
-            h++;
-            continue;
-        }
-        visited.insert(boardString);
-        if (current.isGoal())
-        {
-            printPath(h);
-            return;
-        }
-        // move
-        for (int i = 0; i < 4; i++)
-        {
-            PuzzleBoard child = current;
-            if ((child.*moveFunction[i])())
-            {
-                child.setFather(h);
-                chessVector.push_back(child);
-                t++;
-            }
-        }
-        h++;
-    }
-}
-
-std::vector<PuzzleBoard> dfsAnswer;
-int dfsDepth = INF;
-
-// Structure to store DFS state information
-struct DFSState
-{
+    int f_cost; // f(n) = g(n) + h(n)
+    int g_cost; // actual cost from start
     PuzzleBoard board;
-    int depth;
-    std::vector<PuzzleBoard> path;
 
-    DFSState(PuzzleBoard b, int d, std::vector<PuzzleBoard> p)
-        : board(b), depth(d), path(p) {}
+    bool operator>(const AStarNode &other) const
+    {
+        return f_cost > other.f_cost;
+    }
 };
 
-void dfs(PuzzleBoard initial)
+std::priority_queue<AStarNode, std::vector<AStarNode>, std::greater<AStarNode>> pq;
+
+// int estimateCost(const Board &board)
+// {
+//     // Implement your heuristic function here
+//     int sum = 0;
+//     for (int i = 0; i < 8; i++)
+//     {
+//         int r = positions[i][0];
+//         int c = positions[i][1];
+//         if (board[r][c] != expected[i])
+//         {
+//             sum++;
+//         }
+//     }
+//     return sum;
+// }
+
+int estimateCost(const Board &bodrd) // Manhattan distance
 {
-    std::stack<DFSState> dfsStack;
-    std::vector<PuzzleBoard> initialPath;
-    initialPath.push_back(initial);
-    dfsStack.push(DFSState(initial, 0, initialPath));
+    int manhattan_distance = 0;
 
-    while (!dfsStack.empty())
+    // Calculate Manhattan distance for each number (1-8)
+    for (int i = 0; i < SIZE; i++)
     {
-        DFSState current = dfsStack.top();
-        dfsStack.pop();
+        for (int j = 0; j < SIZE; j++)
+        {
+            char current = bodrd[i][j];
+            if (current != SPACE && current >= '1' && current <= '8')
+            {
+                // Find the target position for this number
+                int target_index = current - '1'; // Convert '1'-'8' to 0-7
+                int target_row = positions[target_index][0];
+                int target_col = positions[target_index][1];
 
-        if (current.depth > MAX_DEPTH)
-        {
-            continue;
+                // Calculate Manhattan distance
+                manhattan_distance += abs(i - target_row) + abs(j - target_col);
+            }
         }
-        if (current.depth > dfsDepth)
-        {
+    }
+
+    return manhattan_distance;
+}
+int ans = std::numeric_limits<int>::max();
+
+void aStar(PuzzleBoard &initialBoard)
+{
+    AStarNode startNode = {estimateCost(initialBoard.board), 0, initialBoard};
+    pq.push(startNode);
+    visited[initialBoard.getBoardString()] = 0;
+
+    while (!pq.empty())
+    {
+        AStarNode current = pq.top();
+        pq.pop();
+
+        // Prune using the A* lower bound (f = g + h). Stronger than only g.
+        if (current.f_cost >= ans)
             continue;
-        }
 
         if (current.board.isGoal())
         {
-            if (current.path.size() < dfsDepth)
-            {
-                dfsDepth = current.depth;
-                dfsAnswer = current.path;
-            }
+            ans = std::min(ans, current.g_cost);
             continue;
         }
+
+        // Skip if we've found a better path to this state
+        auto it = visited.find(current.board.getBoardString());
+        if (it != visited.end() && it->second < current.g_cost)
+            continue;
 
         for (int i = 0; i < 4; i++)
         {
             PuzzleBoard child = current.board;
             if ((child.*moveFunction[i])())
             {
-                std::string boardString = child.getBoardString();
-                if (visited.find(boardString) != visited.end())
+                int newGCost = current.g_cost + 1;
+                int newHCost = estimateCost(child.board);
+                int newFCost = newGCost + newHCost;
+
+                std::string childStr = child.getBoardString();
+                auto childIt = visited.find(childStr);
+
+                // Only add if we haven't seen this state or found a better path
+                if (childIt == visited.end() || childIt->second > newGCost)
                 {
-                    continue;
+                    AStarNode childNode = {newFCost, newGCost, child};
+                    pq.push(childNode);
+                    visited[childStr] = newGCost;
                 }
-                visited.insert(boardString);
-
-                std::vector<PuzzleBoard> newPath = current.path;
-                newPath.push_back(child);
-                dfsStack.push(DFSState(child, current.depth + 1, newPath));
-
-                visited.erase(boardString);
             }
         }
     }
@@ -263,25 +264,22 @@ int main()
     // freopen("1.in", "r", stdin);
     // freopen("1.out", "w", stdout);
     Board board;
+
+    // Read input as a single number
+    std::string input;
+    std::cin >> input;
+
+    // Convert string to 3x3 board
+    int idx = 0;
     for (int i = 0; i < SIZE; i++)
     {
         for (int j = 0; j < SIZE; j++)
         {
-            char c;
-            scanf(" %c", &c); // The space before %c skips whitespace
-            board[i][j] = c;
+            board[i][j] = input[idx++];
         }
     }
+
     PuzzleBoard initPuzzleBoard(board);
-    chessVector.push_back(initPuzzleBoard);
-    t++;
-    bfs();
-    visited.clear();
-    dfs(initPuzzleBoard);
-    for (int i = 0; i < dfsAnswer.size(); i++)
-    {
-        printf("step %d:\n", i + 1);
-        dfsAnswer[i].printBoard();
-        printf("\n");
-    }
+    aStar(initPuzzleBoard);
+    printf("%d\n", ans);
 }

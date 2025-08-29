@@ -141,7 +141,11 @@ public:
 
 std::unordered_set<std::string> visited;
 
-bool (PuzzleBoard::*moveFunction[4])() = {PuzzleBoard::moveUP, PuzzleBoard::moveDOWN, PuzzleBoard::moveLEFT, PuzzleBoard::moveRIGHT};
+bool (PuzzleBoard::*moveFunction[4])() = {
+    &PuzzleBoard::moveUP,
+    &PuzzleBoard::moveDOWN,
+    &PuzzleBoard::moveLEFT,
+    &PuzzleBoard::moveRIGHT};
 
 std::vector<PuzzleBoard> chessVector;
 int h = 0, t = 0;
@@ -153,9 +157,9 @@ int printPath(int index)
         return 1;
     }
     int step = printPath(chessVector[index].getFather());
-    printf("step %d:\n", step);
-    chessVector[index].printBoard();
-    printf("\n");
+    // printf("step %d:\n", step);
+    // chessVector[index].printBoard();
+    // printf("\n");
     return step + 1;
 }
 
@@ -173,7 +177,8 @@ void bfs()
         visited.insert(boardString);
         if (current.isGoal())
         {
-            printPath(h);
+            int ans = printPath(h);
+            printf("%d\n", ans - 2);
             return;
         }
         // move
@@ -268,20 +273,15 @@ int main()
         for (int j = 0; j < SIZE; j++)
         {
             char c;
-            scanf(" %c", &c); // The space before %c skips whitespace
+            scanf("%c", &c); // The space before %c skips whitespace
             board[i][j] = c;
         }
     }
     PuzzleBoard initPuzzleBoard(board);
     chessVector.push_back(initPuzzleBoard);
     t++;
-    bfs();
+    // bfs();
     visited.clear();
     dfs(initPuzzleBoard);
-    for (int i = 0; i < dfsAnswer.size(); i++)
-    {
-        printf("step %d:\n", i + 1);
-        dfsAnswer[i].printBoard();
-        printf("\n");
-    }
+    printf("%d\n", dfsDepth);
 }

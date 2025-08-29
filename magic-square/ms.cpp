@@ -478,8 +478,8 @@ void dfs(MagicSquare head)
 
 int main()
 {
-    freopen("3.in", "r", stdin);
-    freopen("3.out", "w", stdout);
+    freopen("4.in", "r", stdin);
+    freopen("4.out", "w", stdout);
 
     reflaction['b'] = 0;
     reflaction['d'] = 1;
@@ -498,6 +498,7 @@ int main()
     // ms.rotate(1, false);
     // ms.print();
     // bfs(ms);
-    ids(ms);
+    dfs(ms);
+    // ids(ms);
     return 0;
 }

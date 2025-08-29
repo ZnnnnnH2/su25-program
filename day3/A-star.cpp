@@ -20,7 +20,7 @@ int mp[SIZE][SIZE];    // adjacency matrix, real distance
 int heuristic[SIZE];   // heuristic values (straight-line distance to Bucharest)
 int start, goal;       // from Sibiu to Bucharest
 std::vector<int> path; // store the path
-int totalCost = 0;     // total real cost
+int ans = std::numeric_limits<int>::max();
 
 void input()
 {
@@ -66,64 +66,69 @@ void input()
     goal = cityIndex["Bucharest"];
 }
 
-void greedyBestFirstSearch(int start, int goal)
+void AStarSearch(int start, int goal)
 {
-    // Priority queue for greedy best-first search (min-heap based on heuristic)
-    std::priority_queue<std::pair<int, int>, std::vector<std::pair<int, int>>, std::greater<std::pair<int, int>>> pq;
+    // Priority queue for A* search (min-heap based on f = g + h)
+    std::priority_queue<std::tuple<int, int, int>, std::vector<std::tuple<int, int, int>>, std::greater<std::tuple<int, int, int>>> pq;
 
     std::vector<bool> visited(SIZE, false);
     std::vector<int> parent(SIZE, -1);
-    std::vector<int> realCost(SIZE, 0);
+    std::vector<int> gCost(SIZE, std::numeric_limits<int>::max()); // Track the actual cost to reach each node
 
     // Start with the initial node
-    pq.push({heuristic[start], start});
+    gCost[start] = 0;
+    pq.push({heuristic[start], 0, start});
 
     while (!pq.empty())
     {
-        int currentHeuristic = pq.top().first;
-        int current = pq.top().second;
+        int currentHeuristic = std::get<0>(pq.top());
+        int currentRealCost = std::get<1>(pq.top());
+        int current = std::get<2>(pq.top());
         pq.pop();
+
+        if (currentRealCost > ans)
+            continue;
 
         if (visited[current])
             continue;
+
         visited[current] = true;
 
-        // Goal reached
         if (current == goal)
         {
-            // Reconstruct path
-            std::vector<int> tempPath;
-            int node = goal;
-            while (node != -1)
+            while (current != start)
             {
-                tempPath.push_back(node);
-                node = parent[node];
+                path.push_back(current);
+                current = parent[current];
             }
-
-            // Reverse to get path from start to goal
-            path.assign(tempPath.rbegin(), tempPath.rend());
-
-            // Calculate total real cost
-            totalCost = 0;
-            for (int i = 0; i < path.size() - 1; i++)
-            {
-                totalCost += mp[path[i]][path[i + 1]];
-            }
-            return;
+            path.push_back(start);
+            std::reverse(path.begin(), path.end());
+            ans = currentRealCost;
+            printf("ans: %d\n", ans);
+            return; // Found the goal, return immediately
         }
 
-        // Explore neighbors
         for (int neighbor = 0; neighbor < SIZE; neighbor++)
         {
-            if (mp[current][neighbor] != std::numeric_limits<int>::max() &&
-                mp[current][neighbor] != 0 && !visited[neighbor])
+            if (mp[current][neighbor] == std::numeric_limits<int>::max())
+                continue; // No edge
+            if (current == neighbor)
+                continue;
+            if (visited[neighbor])
+                continue; // Skip already visited nodes
+
+            int newCost = currentRealCost + mp[current][neighbor];
+
+            // Only update if we found a better path to this neighbor
+            if (newCost < gCost[neighbor])
             {
-
+                gCost[neighbor] = newCost;
                 parent[neighbor] = current;
-                realCost[neighbor] = realCost[current] + mp[current][neighbor];
-
-                // Add to priority queue with heuristic value
-                pq.push({heuristic[neighbor], neighbor});
+                int newHeuristic = heuristic[neighbor] + newCost;
+                if (newHeuristic < ans)
+                {
+                    pq.push({newHeuristic, newCost, neighbor});
+                }
             }
         }
     }
@@ -158,14 +163,12 @@ void printPath()
                   << " (Real cost: " << mp[from][to]
                   << ", Heuristic: " << heuristic[to] << ")" << std::endl;
     }
-
-    std::cout << "Total real cost: " << totalCost << std::endl;
 }
 
 int main()
 {
     input();
-    greedyBestFirstSearch(start, goal);
+    AStarSearch(start, goal);
     printPath();
     return 0;
 }
