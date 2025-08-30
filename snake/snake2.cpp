@@ -28,8 +28,24 @@ struct Point
  */
 struct Item
 {
-    Point pos;    // 物品位置
-    int type;     // 物品类型
+    Point pos; // 物品位置
+    int type   // 计算局部度数：统计 (ny,nx) 的 4 邻里中未被阻挡且非蛇身的数量，用作简单“空间”评估
+        int deg = 0;
+    for (int t = 0; t < 4; ++t)
+    {
+        int py = ny + DY[t], px = nx + DX[t];
+        if (in_bounds(py, px) && !M.blocked(py, px) && !M.is_snake(py, px))
+            ++deg;
+    }
+    计算局部度数：统计(ny, nx)
+    的 4 邻里中未被阻挡且非蛇身的数量，用作简单“空间”评估 int deg = 0;
+    for (int t = 0; t < 4; ++t)
+    {
+        int py = ny + DY[t], px = nx + DX[t];
+        if (in_bounds(py, px) && !M.blocked(py, px) && !M.is_snake(py, px))
+            ++deg;
+    }
+    物品类型
     int value;    // 物品价值
     int lifetime; // 物品剩余生存时间 (-1表示永久)
 };
@@ -443,18 +459,13 @@ static Choice decide(const State &s)
     GridMask M = build_masks(s);                  // 1) 构建阻挡 / 危险掩码
     const int sy = me.head().y, sx = me.head().x; // 当前蛇头坐标
 
-    // 2) 以当前蛇头为起点做一次全图 BFS，得到到所有可达点的最短步数与回溯父方向
+    stringstream log_ss; // 使用 stringstream 高效构建日志
+    log_ss << "|";
+
+    // 2) 以当前蛇头为起点做一次全图 BFS
     BFSOut G = bfs_grid(M, s, sy, sx);
 
-    // 3) 小工具：判定 (y,x) 是否在 life 限制内可达；返回 (可达标志, 最短距离)
-    // life = -1 表示忽略寿命 / 剩余时间限制；否则要求距离 <= life
-    // BFS 未触达的格子 dist 为 1e9 视为不可达
-    // 注意：这里不额外判断危险格，危险只在真正落子时做硬性规避 / 护盾策略
-    /**
-     * reachable: 判断坐标(y,x)是否在 BFS 图上可达且满足寿命限制
-     *  - d == 1e9 => 不可达
-     *  - life != -1 且 d > life => 超过存活/存在时间限制（例如物品剩余寿命）
-     */
+    // 3) 小工具：判定 (y,x) 是否在 life 限制内可达
     auto reachable = [&](int y, int x, int life)
     {
         int d = (in_bounds(y, x) ? G.dist[y][x] : (int)1e9);
@@ -476,51 +487,36 @@ static Choice decide(const State &s)
     cand.reserve(64);
 
     // 4) 枚举地图上可作为目标的物品，构建候选列表
-    //    当前策略：基于 (价值 / (距离+1)) 作为启发式评分；陷阱直接跳过
-    //    钥匙：仅当地图上存在宝箱且自己尚无钥匙时才追求
-    //    宝箱：仅在已经持有钥匙时才加入候选（否则当作阻挡在 mask 中已处理）
-    //    成长食物：给予固定提升 (这里设为 5.0) 并标记 grows 标志，后续避免踩尾时使用
-    //    注意：尚未加入空间评估 / 风险折扣 / 多回合预测，可作为下一步优化
-    // 2.1 normal items
     for (const auto &it : s.items)
     {
         auto [ok, d] = reachable(it.pos.y, it.pos.x, it.lifetime);
         if (!ok)
             continue;
-
-        // Skip traps
         if (it.type == -2)
             continue;
-
-        // Chest logic: only pursue if we already have a key
         if (it.type == -5 && !me.has_key)
             continue;
-
-        // Key logic: only pursue if we don't have key //ignore and there is a chest
-        // bool haveChest = !s.chests.empty();
-        if (it.type == -3 && me.has_key) //(me.has_key || !haveChest)
+        if (it.type == -3 && me.has_key)
             continue;
 
         double v = 0.0;
         bool grows = false;
-        if (it.type >= 1 && it.type <= 5) // normal food
-            v = it.type * 2;              // normal food
+        if (it.type >= 1 && it.type <= 5)
+            v = it.type * 2;
         else if (it.type == -1)
         {
             v = 10.0;
             grows = true;
-        } // growth bean
+        }
         else if (it.type == -3)
-            v = 25.0; // key (if chest exists)
+            v = 25.0;
         else if (it.type == -5)
-            v = 100.0; // chest (we have key) TODO: if chest have high grades i will up.it's value
+            v = 100.0;
 
-        // primary: value density; softer space/center terms removed here
         double sc = v / (d + 1.0);
         cand.push_back({it.pos.y, it.pos.x, sc, d, grows});
     }
 
-    // 2.2 add explicit chests from s.chests when we hold a key
     if (me.has_key)
     {
         for (const auto &c : s.chests)
@@ -528,40 +524,25 @@ static Choice decide(const State &s)
             auto [ok, d] = reachable(c.pos.y, c.pos.x, -1);
             if (!ok)
                 continue;
-            double sc = (c.score > 0 ? c.score : 60.0) / (d + 1.0); // high value
-            cand.push_back({c.pos.y, c.pos.x, sc, d, /*grows*/ false});
+            double sc = (c.score > 0 ? c.score : 60.0) / (d + 1.0);
+            cand.push_back({c.pos.y, c.pos.x, sc, d, false});
         }
     }
-    str_info += to_string(cand.size()) + " ";
+
+    log_ss << "C" << cand.size();
+
     // 5) 如果没有任何候选目标：执行“求生优先”兜底策略
-    //    逻辑：在四个方向里找一个非阻挡且非危险的格子，优先局部可继续展开的（统计其周围可走邻居数量）
-    //    若无安全步并且护盾可用 -> 开盾
-    //    若依然无路 -> 选择任意能走的一步（可能是撞击 / 冒险）或最终开盾
-    // No good targets? fall back to safest non-danger move
     if (cand.empty())
     {
-        // ================= 兜底：无任何可行目标 (无食物 / 都不可达) 时的“求生”策略 =================
-        // 思路：在四个基本方向中挑选：安全 + 留有更多后续扩展空间 的那一步。
-        // 步骤：
-        //   1) 枚举四个方向（左上右下） -> (ny,nx) 为潜在下一格。
-        //   2) 过滤：越界 / 被阻挡 / 预测危险(敌头周围) 直接放弃。
-        //   3) 对保留下来的合法候选，计算其“局部可扩展度” deg：统计该格四邻中仍可走(未阻挡)的数量。
-        //      这是一个很粗糙但常见的局部空域启发(局部度数 / local degree)，避免钻入死胡同。
-        //   4) 取 deg 最大的方向；若多个方向同 deg，保持第一个（可改进为随机化防止模式化）。
-        int bestDir = -1;   // 记录当前最佳方向索引 k (0..3)
-        int bestReach = -1; // 记录该方向对应的局部可扩展度 (度数更大优先)
+        log_ss << "|RS"; // Reason: Survival
+        int bestDir = -1;
+        int bestReach = -1;
         for (int k = 0; k < 4; ++k)
         {
-            int ny = sy + DY[k], nx = sx + DX[k]; // 计算下一步格子坐标
-            // 过滤条件：
-            //  - 越界 -> 不能走
-            //  - 阻挡 -> 身体/墙/安全区外/宝箱(未拿钥匙)/陷阱 已在 mask 中标记
-            //  - 危险 -> 敌方蛇头下一步可能到达区域，优先回避
+            int ny = sy + DY[k], nx = sx + DX[k];
             if (!in_bounds(ny, nx) || M.blocked(ny, nx) || M.is_danger(ny, nx) || M.is_snake(ny, nx))
                 continue;
-            // 初步认为 k 是一个候选方向（即便后面可能被更高 deg 取代）
-            bestDir = k;
-            // 计算局部度数：统计 (ny,nx) 的 4 邻里中未被阻挡的数量，用作简单“空间”评估
+
             int deg = 0;
             for (int t = 0; t < 4; ++t)
             {
@@ -569,63 +550,74 @@ static Choice decide(const State &s)
                 if (in_bounds(py, px) && !M.blocked(py, px) && !M.is_snake(py, px))
                     ++deg;
             }
-            // 如果该方向拥有更高的局部自由度，则更新最佳选择
             if (deg > bestReach)
             {
                 bestReach = deg;
                 bestDir = k;
             }
         }
-        // 找到了至少一个安全方向 -> 直接返回该方向动作
+
         if (bestDir != -1)
+        {
+            log_ss << "|M" << ACT[bestDir] << "|D" << bestReach;
+            str_info += log_ss.str();
             return {ACT[bestDir]};
-        // 没有任何安全方向：说明四邻都阻挡或危险；若护盾冷却为 0 且当前未在护盾 -> 尝试开盾苟活
+        }
+
         if (me.shield_cd == 0 && me.shield_time == 0)
+        {
+            log_ss << "|SF"; // Shield Fallback
+            str_info += log_ss.str();
             return {4};
-        // 仍然没有盾 / 不想开盾：最后再尝试“硬闯”一个未阻挡（即使是危险）的格子，尽量不原地等死
+        }
+
         for (int k = 0; k < 4; ++k)
         {
             int ny = sy + DY[k], nx = sx + DX[k];
             if (in_bounds(ny, nx) && !M.blocked(ny, nx) && !M.is_snake(ny, nx))
-                return {ACT[k]}; // 可能是危险格，但比完全无移动更好（可视对局规则调整）
+            {
+                log_ss << "|MF" << ACT[k]; // Move Fallback
+                str_info += log_ss.str();
+                return {ACT[k]};
+            }
         }
-        // 所有方向都被阻挡（包括撞身体 / 墙 / 区域外），只能寄希望护盾（若前面未触发，这里兜底返回 4）
+
+        log_ss << "|SF"; // Final Shield Fallback
+        str_info += log_ss.str();
         return {4};
     }
 
-    // 6) 选择评分最高的目标（分数优先, 若近似相等再按距离更短）
-    //    cand.front() 排序后即为最佳目标
-    // choose best target
+    // 6) 选择评分最高的目标
     sort(cand.begin(), cand.end(), [](const Target &a, const Target &b)
          {
         if (fabs(a.score - b.score) > 1e-9) return a.score > b.score;
         return a.dist < b.dist; });
     const auto target = cand.front();
-    str_info += "Tgt@" + to_string(target.y) + "," + to_string(target.x) + "\n";
-    // 7) 回溯路径：从目标格反向沿 parent 走到与起点相邻的第一步格 (cy,cx)
-    //    parent[y][x] 存储的是“从 (y,x) 回到其父格的方向”，因此回溯时不断朝 parent 指向的方向前进
-    // reconstruct first step from parent grid
+
+    log_ss << "|RT|T" << target.y << "," << target.x << "|D" << target.dist;
+
+    // 7) 回溯路径
     int ty = target.y, tx = target.x;
     if (G.parent[ty][tx] == -1)
     {
-        // shouldn't happen (we checked reachable), be safe:
+        log_ss << "|ENP"; // Error: No Parent
+        str_info += log_ss.str();
         if (me.shield_cd == 0 && me.shield_time == 0)
             return {4};
         return {0};
-        str_info += "no parent";
     }
-    // walk back from target to the neighbor of (sy,sx)
+
     int cy = ty, cx = tx;
     while (!(cy == sy && cx == sx))
     {
-        int back = G.parent[cy][cx]; // direction to go back toward parent
+        int back = G.parent[cy][cx];
         int py = cy + DY[back], px = cx + DX[back];
         if (py == sy && px == sx)
             break;
         cy = py;
         cx = px;
     }
-    // (cy,cx) is the first step
+
     int dir = -1;
     for (int k = 0; k < 4; ++k)
         if (sy + DY[k] == cy && sx + DX[k] == cx)
@@ -633,24 +625,35 @@ static Choice decide(const State &s)
             dir = k;
             break;
         }
+
     if (dir == -1)
     {
+        log_ss << "|END"; // Error: No Direction
+        str_info += log_ss.str();
         if (me.shield_cd == 0 && me.shield_time == 0)
             return {4};
         return {0};
     }
 
-    // 8) 危险格硬检测：若第一步落在敌头下一步可达预测区域且可立即开盾 -> 用护盾替代移动
-    //    （也可改为：若危险但收益高时赌一手；当前实现保守）
-    // danger hard check: if first step lands in predicted enemy-head zone and shield ready, use shield
+    // 8) 危险格硬检测
     if (M.is_danger(cy, cx) && me.shield_cd == 0 && me.shield_time == 0)
+    {
+        log_ss << "|SD"; // Shield for Danger
+        str_info += log_ss.str();
         return {4};
+    }
 
-    // 9)（已简化）根据游戏规则：自身身体（含尾巴所在格）本回合不会造成自撞
-    //    原先为“成长导致尾巴不前进需避免踩尾”的逻辑已移除；不再区分增长与否，直接执行路径第一步。
-    //    如果未来规则改变（例如身体立即判撞），可恢复此前 growsNow 检测与尾巴占用回避代码。
+    // 9) 关键BUG修复：如果路径的第一步是敌方蛇身，必须使用护盾
+    if (M.is_snake(cy, cx))
+    {
+        log_ss << "|SS"; // Shield for Snake
+        str_info += log_ss.str();
+        return {4};
+    }
 
-    // 10) 返回最终决策动作（0~3 对应 左上右下）。未触发护盾兜底则直接执行第一步方向
+    // 10) 返回最终决策动作
+    log_ss << "|M" << ACT[dir];
+    str_info += log_ss.str();
     return {ACT[dir]};
 }
 
