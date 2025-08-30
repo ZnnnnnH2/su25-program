@@ -28,24 +28,8 @@ struct Point
  */
 struct Item
 {
-    Point pos; // 物品位置
-    int type   // 计算局部度数：统计 (ny,nx) 的 4 邻里中未被阻挡且非蛇身的数量，用作简单“空间”评估
-        int deg = 0;
-    for (int t = 0; t < 4; ++t)
-    {
-        int py = ny + DY[t], px = nx + DX[t];
-        if (in_bounds(py, px) && !M.blocked(py, px) && !M.is_snake(py, px))
-            ++deg;
-    }
-    计算局部度数：统计(ny, nx)
-    的 4 邻里中未被阻挡且非蛇身的数量，用作简单“空间”评估 int deg = 0;
-    for (int t = 0; t < 4; ++t)
-    {
-        int py = ny + DY[t], px = nx + DX[t];
-        if (in_bounds(py, px) && !M.blocked(py, px) && !M.is_snake(py, px))
-            ++deg;
-    }
-    物品类型
+    Point pos;    // 物品位置
+    int type;     // 物品类型
     int value;    // 物品价值
     int lifetime; // 物品剩余生存时间 (-1表示永久)
 };
@@ -372,8 +356,9 @@ static GridMask build_masks(const State &s)
  */
 struct BFSOut
 {
-    array<array<int, W>, H> dist;   // 距离矩阵 dist[y][x]
-    array<array<int, W>, H> parent; // 父节点方向 parent[y][x]
+    array<array<int, W>, H> dist;       // 距离矩阵 dist[y][x]
+    array<array<int, W>, H> snake_cost; // 穿过蛇身的代价 snake_cost[y][x]
+    array<array<int, W>, H> parent;     // 父节点方向 parent[y][x]
 };
 
 /**
@@ -394,38 +379,63 @@ static BFSOut bfs_grid(const GridMask &M, const State &s, int sy, int sx)
         for (int x = 0; x < W; x++)
         {
             out.dist[y][x] = 1e9;
+            out.snake_cost[y][x] = 0;
             out.parent[y][x] = -1;
         }
 
-    deque<pair<int, int>> dq; // BFS队列
+    // 使用优先队列进行带权重的搜索
+    priority_queue<tuple<int, int, int, int>, vector<tuple<int, int, int, int>>, greater<>> pq;
 
-    // 起始位置不被阻挡，加入队列
+    // 起始位置
     out.dist[sy][sx] = 0;
-    dq.emplace_back(sy, sx);
+    out.snake_cost[sy][sx] = 0;
+    pq.emplace(0, 0, sy, sx); // (总代价, 蛇身代价, y, x)
 
     // BFS主循环
-    while (!dq.empty())
+    while (!pq.empty())
     {
-        auto [y, x] = dq.front();
-        dq.pop_front();
-        int dcur = out.dist[y][x];
+        auto [total_cost, snake_steps, y, x] = pq.top();
+        pq.pop();
+
+        // 如果已经找到更好的路径，跳过
+        if (total_cost > out.dist[y][x] + out.snake_cost[y][x] * 100)
+            continue;
 
         // 尝试四个方向
         for (int k = 0; k < 4; k++)
         {
             int ny = y + DY[k], nx = x + DX[k];
 
-            // 检查边界和阻挡，有盾且时间足够就上盾
-            if (!in_bounds(ny, nx) || M.blocked(ny, nx) || (M.is_snake(ny, nx) && s.snakes[s.self_idx].shield_time <= dcur + 1))
+            // 检查边界和阻挡
+            if (!in_bounds(ny, nx) || M.blocked(ny, nx))
                 continue;
 
-            // 如果找到更短路径，更新距离和父节点
-            if (out.dist[ny][nx] > dcur + 1)
+            int new_dist = out.dist[y][x] + 1;
+            int new_snake_cost = out.snake_cost[y][x];
+
+            // 如果是蛇身格子，增加蛇身代价
+            if (M.is_snake(ny, nx))
             {
-                out.dist[ny][nx] = dcur + 1;
-                // parent 存储的是从 (ny, nx) 返回 (y, x) 的方向，即当前移动的逆方向
+                // 如果没有护盾且无法激活护盾，给予很高的代价但不完全禁止
+                if (s.snakes[s.self_idx].shield_time == 0 && s.snakes[s.self_idx].shield_cd > 0)
+                {
+                    new_snake_cost += 10; // 高代价，但仍然可达
+                }
+                else
+                {
+                    new_snake_cost += 1; // 有护盾时的正常代价
+                }
+            }
+
+            int new_total_cost = new_dist + new_snake_cost * 100; // 蛇身代价权重为100
+
+            // 如果找到更好的路径，更新
+            if (new_total_cost < out.dist[ny][nx] + out.snake_cost[ny][nx] * 100)
+            {
+                out.dist[ny][nx] = new_dist;
+                out.snake_cost[ny][nx] = new_snake_cost;
                 out.parent[ny][nx] = (k + 2) % 4;
-                dq.emplace_back(ny, nx); // 加入队列
+                pq.emplace(new_total_cost, new_snake_cost, ny, nx);
             }
         }
     }
@@ -469,11 +479,12 @@ static Choice decide(const State &s)
     auto reachable = [&](int y, int x, int life)
     {
         int d = (in_bounds(y, x) ? G.dist[y][x] : (int)1e9);
+        int snake_steps = (in_bounds(y, x) ? G.snake_cost[y][x] : (int)1e9);
         if (d >= (int)1e9)
-            return make_pair(false, d);
+            return make_tuple(false, d, snake_steps);
         if (life != -1 && d > life)
-            return make_pair(false, d);
-        return make_pair(true, d);
+            return make_tuple(false, d, snake_steps);
+        return make_tuple(true, d, snake_steps);
     };
 
     struct Target
@@ -481,6 +492,7 @@ static Choice decide(const State &s)
         int y, x;
         double score;
         int dist;
+        int snake_cost;
         bool grows;
     };
     vector<Target> cand;
@@ -489,7 +501,7 @@ static Choice decide(const State &s)
     // 4) 枚举地图上可作为目标的物品，构建候选列表
     for (const auto &it : s.items)
     {
-        auto [ok, d] = reachable(it.pos.y, it.pos.x, it.lifetime);
+        auto [ok, d, snake_steps] = reachable(it.pos.y, it.pos.x, it.lifetime);
         if (!ok)
             continue;
         if (it.type == -2)
@@ -513,19 +525,22 @@ static Choice decide(const State &s)
         else if (it.type == -5)
             v = 100.0;
 
-        double sc = v / (d + 1.0);
-        cand.push_back({it.pos.y, it.pos.x, sc, d, grows});
+        // 安全性惩罚：穿过蛇身的路径降低评分
+        double safety_penalty = 1.0 + snake_steps * 0.5; // 每个蛇身格子降低50%的效率
+        double sc = v / ((d + 1.0) * safety_penalty);
+        cand.push_back({it.pos.y, it.pos.x, sc, d, snake_steps, grows});
     }
 
     if (me.has_key)
     {
         for (const auto &c : s.chests)
         {
-            auto [ok, d] = reachable(c.pos.y, c.pos.x, -1);
+            auto [ok, d, snake_steps] = reachable(c.pos.y, c.pos.x, -1);
             if (!ok)
                 continue;
-            double sc = (c.score > 0 ? c.score : 60.0) / (d + 1.0);
-            cand.push_back({c.pos.y, c.pos.x, sc, d, false});
+            double safety_penalty = 1.0 + snake_steps * 0.5;
+            double sc = (c.score > 0 ? c.score : 60.0) / ((d + 1.0) * safety_penalty);
+            cand.push_back({c.pos.y, c.pos.x, sc, d, snake_steps, false});
         }
     }
 
@@ -594,7 +609,7 @@ static Choice decide(const State &s)
         return a.dist < b.dist; });
     const auto target = cand.front();
 
-    log_ss << "|RT|T" << target.y << "," << target.x << "|D" << target.dist;
+    log_ss << "|RT|T" << target.y << "," << target.x << "|D" << target.dist << "|S" << target.snake_cost;
 
     // 7) 回溯路径
     int ty = target.y, tx = target.x;
@@ -643,12 +658,31 @@ static Choice decide(const State &s)
         return {4};
     }
 
-    // 9) 关键BUG修复：如果路径的第一步是敌方蛇身，必须使用护盾
+    // 9) 蛇身检测：只有在确实需要穿过且护盾可用时才使用护盾
     if (M.is_snake(cy, cx))
     {
-        log_ss << "|SS"; // Shield for Snake
-        str_info += log_ss.str();
-        return {4};
+        // 检查是否有护盾可用
+        if (me.shield_time > 0)
+        {
+            // 当前有护盾，直接移动
+            log_ss << "|M" << ACT[dir] << "|SH"; // 使用现有护盾移动
+            str_info += log_ss.str();
+            return {ACT[dir]};
+        }
+        else if (me.shield_cd == 0)
+        {
+            // 可以激活护盾
+            log_ss << "|SS"; // Shield for Snake
+            str_info += log_ss.str();
+            return {4};
+        }
+        else
+        {
+            // 无护盾可用，尝试重新选择目标或进入生存模式
+            log_ss << "|NSH|SF"; // No Shield, Shield Fallback
+            str_info += log_ss.str();
+            return {4}; // 作为最后手段开盾，即使在冷却中
+        }
     }
 
     // 10) 返回最终决策动作
