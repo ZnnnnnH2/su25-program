@@ -339,7 +339,7 @@ public:
 int heuristic(const MagicSquare &ms)
 {
     // 示例：计算不匹配面的数量作为启发式
-    // 这是可接受的，因为每步最多修复1个面，所以不会高估
+    // 这是可接受的，因为每步最多修复4个面，所以不会高估
     int mismatched_faces = 0;
     for (int i = 0; i < 6; i++)
     {
@@ -357,7 +357,7 @@ int heuristic(const MagicSquare &ms)
         }
     next_face:;
     }
-    return mismatched_faces;
+    return mismatched_faces/4;
 
     // 或者简单返回0保持原来的行为
     // return 0;
@@ -500,7 +500,7 @@ void AStar(MagicSquare ms)
 
 int main()
 {
-    freopen("1.in", "r", stdin);
+    freopen("4.in", "r", stdin);
     // freopen("4.out", "w", stdout);
 
     reflaction['b'] = 0;
