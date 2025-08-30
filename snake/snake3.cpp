@@ -22,7 +22,7 @@ struct Point
  * value含义：
  * - 正数: 普通食物的分值
  * - -1: 成长食物（使蛇身变长）
- * - -2: 陷阱（有害） //扣20分
+ * - -2: 陷阱（有害）
  * - -3: 钥匙
  * - -5: 宝箱
  */
@@ -94,6 +94,34 @@ struct State
 
 string str_info;
 
+struct Worth
+{
+    bool ok; // allow shield?
+    const char *why;
+};
+
+static Worth should_use_shield(const State &s, int target_value, bool survival_only = false)
+{
+    const auto &me = s.self();
+
+    // forbid using shield when gain is small
+    const int MIN_GAIN_TO_SHIELD = 15; // tunable; "too small" -> no shield
+    if (!survival_only && target_value < MIN_GAIN_TO_SHIELD)
+        return {false, "small"};
+
+    // never if shield not ready
+    if (me.shield_time > 0)
+        return {true, "already_on"};
+    if (me.shield_cd > 0)
+        return {false, "cooling"};
+
+    // additional late-game leniency (optional)
+    if (!survival_only && s.remaining_ticks < 30)
+        return {true, "late"};
+
+    return {true, "ok"};
+}
+
 // ==================== 输入输出：每回合读取游戏状态 ====================
 
 /**
@@ -102,8 +130,6 @@ string str_info;
  */
 static void read_state(State &s)
 {
-
-
     // 读取剩余回合数，如果读取失败则退出
     if (!(cin >> s.remaining_ticks))
         exit(0);
@@ -115,7 +141,29 @@ static void read_state(State &s)
     for (int i = 0; i < m; i++)
     {
         cin >> s.items[i].pos.y >> s.items[i].pos.x >> s.items[i].type >> s.items[i].lifetime;
-        
+        switch (s.items[i].type)
+        {
+        case 5:
+        case 4:
+        case 3:
+        case 2:
+        case 1:
+            s.items[i].value = s.items[i].type;
+            break; // 普通食物
+        case -1:
+            s.items[i].value = 3;
+            break; // 成长食物
+        case -2:
+            s.traps.push_back(s.items[i].pos);
+            s.items[i].value = -2;
+            break; // 陷阱
+        case -3:
+            s.items[i].value = 10;
+            break; // 钥匙
+        case -5:
+            s.items[i].value = 10;
+            break; // 宝箱
+        }
     }
 
     // ========== 读取蛇信息 ==========
@@ -198,6 +246,7 @@ struct GridMask
     bitset<W> blocked_rows[H]; // 墙位置的位掩码
     bitset<W> snake_rows[H];   // 敌方蛇身体位置的位掩码
     bitset<W> danger_rows[H];  // 危险位置的位掩码
+    bitset<W> near_rows[H];    // NEW: cells adjacent to enemy bodies (soft danger)
 
     /**
      * 标记位置为墙
@@ -227,6 +276,15 @@ struct GridMask
     }
 
     /**
+     * 标记位置为接近敌方蛇身体
+     */
+    inline void near(int y, int x)
+    {
+        if (in_bounds(y, x))
+            near_rows[y].set(x);
+    }
+
+    /**
      * 检查位置是否被阻挡
      */
     inline bool blocked(int y, int x) const { return in_bounds(y, x) ? blocked_rows[y].test(x) : true; }
@@ -240,6 +298,11 @@ struct GridMask
      * 检查位置是否危险
      */
     inline bool is_danger(int y, int x) const { return in_bounds(y, x) ? danger_rows[y].test(x) : true; }
+
+    /**
+     * 检查位置是否接近敌方蛇身体
+     */
+    inline bool is_near(int y, int x) const { return in_bounds(y, x) ? near_rows[y].test(x) : false; }
 };
 
 // ==================== 地图掩码构建 ====================
@@ -281,7 +344,10 @@ static GridMask build_masks(const State &s)
         { // 其他蛇全部身体阻挡
             for (const auto &p : sn.body)
                 if (in_bounds(p.y, p.x))
-                    M.snake(p.y, p.x);
+                {
+                    M.snake(p.y, p.x); // remember enemy body
+                    M.block(p.y, p.x); // hard wall
+                }
         }
     }
 
@@ -310,6 +376,8 @@ static GridMask build_masks(const State &s)
         if (sn.id == MYID) // 跳过自己的蛇
             continue;
         auto h = sn.head();
+        if (in_bounds(h.y, h.x) && in_safe(s.cur, h.y, h.x))
+            M.danger(h.y, h.x); // head itself
         // 标记敌蛇头部四周的位置为危险
         for (int k = 0; k < 4; k++)
         {
@@ -321,6 +389,19 @@ static GridMask build_masks(const State &s)
                 M.danger(ny, nx);
         }
     }
+
+    // 6) NEW: body-adjacent halo (soft)
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+            if (M.is_snake(y, x))
+            {
+                for (int k = 0; k < 4; k++)
+                {
+                    int ny = y + DY[k], nx = x + DX[k];
+                    if (in_bounds(ny, nx) && !M.blocked(ny, nx))
+                        M.near(ny, nx);
+                }
+            }
     return M;
 }
 
@@ -359,59 +440,51 @@ static BFSOut bfs_grid(const GridMask &M, const State &s, int sy, int sx)
             out.parent[y][x] = -1;
         }
 
-    // 使用优先队列进行带权重的搜索
-    priority_queue<tuple<int, int, int, int>, vector<tuple<int, int, int, int>>, greater<>> pq;
+    // weights (tunable):
+    const int W_BODY = 200; // cost per enemy-body cell traversed (very high)
+    const int W_NEAR = 3;   // small bias to keep clearance
+    const int W_STEP = 1;   // step cost
 
-    // 起始位置
+    using Node = tuple<int, int, int, int>; // (F, snake_cost, y, x)
+    priority_queue<Node, vector<Node>, greater<>> pq;
+
     out.dist[sy][sx] = 0;
-    out.snake_cost[sy][sx] = 0;
-    pq.emplace(0, 0, sy, sx); // (总代价, 蛇身代价, y, x)
+    pq.emplace(0, 0, sy, sx);
 
-    // BFS主循环
+    auto f_of = [&](int d, int sc)
+    { return d * W_STEP + sc * W_BODY; };
+
     while (!pq.empty())
     {
-        auto [total_cost, snake_steps, y, x] = pq.top();
+        auto [F, sc, y, x] = pq.top();
         pq.pop();
-
-        // 如果已经找到更好的路径，跳过
-        if (total_cost > out.dist[y][x] + out.snake_cost[y][x] * 100)
+        // current best?
+        if (F != f_of(out.dist[y][x], out.snake_cost[y][x]))
             continue;
 
-        // 尝试四个方向
         for (int k = 0; k < 4; k++)
         {
             int ny = y + DY[k], nx = x + DX[k];
-
-            // 检查边界和阻挡
             if (!in_bounds(ny, nx) || M.blocked(ny, nx))
                 continue;
 
-            int new_dist = out.dist[y][x] + 1;
-            int new_snake_cost = out.snake_cost[y][x];
+            int nd = out.dist[y][x] + 1;
+            int nsc = out.snake_cost[y][x];
 
-            // 如果是蛇身格子，增加蛇身代价
+            // strong penalty for stepping on enemy body
             if (M.is_snake(ny, nx))
-            {
-                // 如果没有护盾且无法激活护盾，给予很高的代价但不完全禁止
-                if (s.snakes[s.self_idx].shield_time == 0 && s.snakes[s.self_idx].shield_cd > 0)
-                {
-                    new_snake_cost += 10; // 高代价，但仍然可达
-                }
-                else
-                {
-                    new_snake_cost += 1; // 有护盾时的正常代价
-                }
-            }
+                nsc += 1;
 
-            int new_total_cost = new_dist + new_snake_cost * 100; // 蛇身代价权重为100
+            // soft penalty near enemy body
+            int nF = f_of(nd, nsc) + (M.is_near(ny, nx) ? W_NEAR : 0);
 
-            // 如果找到更好的路径，更新
-            if (new_total_cost < out.dist[ny][nx] + out.snake_cost[ny][nx] * 100)
+            int curF = f_of(out.dist[ny][nx], out.snake_cost[ny][nx]);
+            if (nF < curF)
             {
-                out.dist[ny][nx] = new_dist;
-                out.snake_cost[ny][nx] = new_snake_cost;
+                out.dist[ny][nx] = nd;
+                out.snake_cost[ny][nx] = nsc;
                 out.parent[ny][nx] = (k + 2) % 4;
-                pq.emplace(new_total_cost, new_snake_cost, ny, nx);
+                pq.emplace(nF, nsc, ny, nx);
             }
         }
     }
@@ -470,6 +543,7 @@ static Choice decide(const State &s)
         int dist;
         int snake_cost;
         bool grows;
+        int value; // NEW: raw value for shield policy
     };
     vector<Target> cand;
     cand.reserve(64);
@@ -504,7 +578,7 @@ static Choice decide(const State &s)
         // 安全性惩罚：穿过蛇身的路径降低评分
         double safety_penalty = 1.0 + snake_steps * 0.5; // 每个蛇身格子降低50%的效率
         double sc = v / ((d + 1.0) * safety_penalty);
-        cand.push_back({it.pos.y, it.pos.x, sc, d, snake_steps, grows});
+        cand.push_back({it.pos.y, it.pos.x, sc, d, snake_steps, grows, (int)round(v)});
     }
 
     if (me.has_key)
@@ -516,7 +590,7 @@ static Choice decide(const State &s)
                 continue;
             double safety_penalty = 1.0 + snake_steps * 0.5;
             double sc = (c.score > 0 ? c.score : 60.0) / ((d + 1.0) * safety_penalty);
-            cand.push_back({c.pos.y, c.pos.x, sc, d, snake_steps, false});
+            cand.push_back({c.pos.y, c.pos.x, sc, d, snake_steps, false, (c.score > 0 ? c.score : 60)});
         }
     }
 
@@ -626,42 +700,106 @@ static Choice decide(const State &s)
         return {0};
     }
 
-    // 8) 危险格硬检测
-    if (M.is_danger(cy, cx) && me.shield_cd == 0 && me.shield_time == 0)
-    {
-        log_ss << "|SD"; // Shield for Danger
-        str_info += log_ss.str();
-        return {4};
-    }
+    // --- Risk checks for the chosen first step (cy,cx) -> dir ---
 
-    // 9) 蛇身检测：只有在确实需要穿过且护盾可用时才使用护盾
-    if (M.is_snake(cy, cx))
+    auto try_dodge = [&]() -> int
     {
-        // 检查是否有护盾可用
-        if (me.shield_time > 0)
+        // choose the safest neighbor by: not blocked, not enemy body,
+        // lowest danger, lowest near-penalty, many degrees
+        int best = -1, bestScore = -1;
+        for (int k = 0; k < 4; k++)
         {
-            // 当前有护盾，直接移动
-            log_ss << "|M" << ACT[dir] << "|SH"; // 使用现有护盾移动
+            int ny = sy + DY[k], nx = sx + DX[k];
+            if (!in_bounds(ny, nx) || M.blocked(ny, nx) || M.is_snake(ny, nx))
+                continue;
+            // prefer non-danger, non-near, higher free-degree
+            int deg = 0;
+            for (int t = 0; t < 4; t++)
+            {
+                int py = ny + DY[t], px = nx + DX[t];
+                if (in_bounds(py, px) && !M.blocked(py, px) && !M.is_snake(py, px))
+                    deg++;
+            }
+            int score = (M.is_danger(ny, nx) ? 0 : 2) + (M.is_near(ny, nx) ? 0 : 1) + deg;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = k;
+            }
+        }
+        return best; // -1 if none
+    };
+
+    // 8) hard risk: enemy-head zone or enemy body
+    bool step_danger = M.is_danger(cy, cx);
+    bool step_body = M.is_snake(cy, cx);
+
+    if (step_body || step_danger)
+    {
+        // Try to dodge first
+        int alt = try_dodge();
+        if (alt != -1)
+        {
+            log_ss << "|DJ" << ACT[alt]; // log: Dodged
+            str_info += log_ss.str();
+            return {ACT[alt]};
+        }
+
+        // If no dodge, consider shield policy:
+        // - If stepping into BODY: only allow if survival or big gain.
+        // - If stepping into DANGER (head fight): same rule.
+        auto gate = should_use_shield(s, target.value, /*survival_only=*/false);
+        if (!gate.ok)
+        {
+            // As we are forced, attempt any legal non-body move (even if danger)
+            for (int k = 0; k < 4; k++)
+            {
+                int ny = sy + DY[k], nx = sx + DX[k];
+                if (in_bounds(ny, nx) && !M.blocked(ny, nx) && !M.is_snake(ny, nx))
+                {
+                    log_ss << "|F" << ACT[k]; // Forced move
+                    str_info += log_ss.str();
+                    return {ACT[k]};
+                }
+            }
+            // survival-only: if literally no other output, allow shield if ready
+            gate = should_use_shield(s, /*tiny*/ 0, /*survival_only=*/true);
+            if (gate.ok)
+            {
+                log_ss << "|SF"; // Survival shield
+                str_info += log_ss.str();
+                return {4};
+            }
+            // otherwise just pick dir (may die, but policy respected)
+            log_ss << "|M" << ACT[dir];
             str_info += log_ss.str();
             return {ACT[dir]};
         }
-        else if (me.shield_cd == 0)
-        {
-            // 可以激活护盾
-            log_ss << "|SS"; // Shield for Snake
-            str_info += log_ss.str();
-            return {4};
-        }
         else
         {
-            // 无护盾可用，尝试重新选择目标或进入生存模式
-            log_ss << "|NSH|SF"; // No Shield, Shield Fallback
+            // Shield allowed (big gain or late game) — but only if shield is actually available
+            const auto &me = s.self();
+            if (me.shield_time > 0 || me.shield_cd == 0)
+            {
+                log_ss << "|SS"; // Shield for big value
+                str_info += log_ss.str();
+                return {4};
+            }
+            // else: do our best without shield
+            int alt2 = try_dodge();
+            if (alt2 != -1)
+            {
+                log_ss << "|DJ2" << ACT[alt2]; // Second dodge attempt
+                str_info += log_ss.str();
+                return {ACT[alt2]};
+            }
+            log_ss << "|M" << ACT[dir];
             str_info += log_ss.str();
-            return {4}; // 作为最后手段开盾，即使在冷却中
+            return {ACT[dir]};
         }
     }
 
-    // 10) 返回最终决策动作
+    // 9) normal safe case
     log_ss << "|M" << ACT[dir];
     str_info += log_ss.str();
     return {ACT[dir]};
