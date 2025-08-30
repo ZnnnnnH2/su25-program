@@ -338,7 +338,6 @@ static GridMask build_masks(const State &s)
         for (int k = 0; k < 4; k++)
         {
             int ny = h.y + DY[k], nx = h.x + DX[k];
-            // 如果敌蛇持有护盾，其头部不会造成威胁，可以穿过。但如果敌蛇没有护盾，我们仍然要避免与它碰撞
             // 考虑敌蛇下一步可能移动到的位置
             // 如果我方蛇没有护盾，需要避开这些潜在的敌蛇头部位置
 
@@ -567,7 +566,7 @@ static Choice decide(const State &s)
             for (int t = 0; t < 4; ++t)
             {
                 int py = ny + DY[t], px = nx + DX[t];
-                if (in_bounds(py, px) && !M.blocked(py, px))
+                if (in_bounds(py, px) && !M.blocked(py, px) && !M.is_snake(py, px))
                     ++deg;
             }
             // 如果该方向拥有更高的局部自由度，则更新最佳选择
@@ -587,7 +586,7 @@ static Choice decide(const State &s)
         for (int k = 0; k < 4; ++k)
         {
             int ny = sy + DY[k], nx = sx + DX[k];
-            if (in_bounds(ny, nx) && !M.blocked(ny, nx))
+            if (in_bounds(ny, nx) && !M.blocked(ny, nx) && !M.is_snake(ny, nx))
                 return {ACT[k]}; // 可能是危险格，但比完全无移动更好（可视对局规则调整）
         }
         // 所有方向都被阻挡（包括撞身体 / 墙 / 区域外），只能寄希望护盾（若前面未触发，这里兜底返回 4）
@@ -602,7 +601,7 @@ static Choice decide(const State &s)
         if (fabs(a.score - b.score) > 1e-9) return a.score > b.score;
         return a.dist < b.dist; });
     const auto target = cand.front();
-
+    str_info += "Tgt@" + to_string(target.y) + "," + to_string(target.x) + "\n";
     // 7) 回溯路径：从目标格反向沿 parent 走到与起点相邻的第一步格 (cy,cx)
     //    parent[y][x] 存储的是“从 (y,x) 回到其父格的方向”，因此回溯时不断朝 parent 指向的方向前进
     // reconstruct first step from parent grid
@@ -680,5 +679,6 @@ int main()
     read_state(s);
     auto choice = decide(s);
     cout << choice.action << "\n";
+    cout << str_info << "\n";
     return 0;
 }
