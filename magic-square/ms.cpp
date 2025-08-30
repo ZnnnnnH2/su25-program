@@ -6,6 +6,7 @@
 #include <array>
 #include <stack>
 #include <queue>
+#include "./timer.cpp"
 
 #define SIZE 3
 
@@ -491,8 +492,8 @@ void dfs(MagicSquare head, int maxDepth = 10)
 
 int main()
 {
-    freopen("2.in", "r", stdin);
-    freopen("2.out", "w", stdout);
+    freopen("4.in", "r", stdin);
+    // freopen("4.out", "w", stdout);
 
     reflaction['b'] = 0;
     reflaction['d'] = 1;
@@ -510,8 +511,13 @@ int main()
     // ms.rotate(7, true);
     // ms.rotate(1, false);
     // ms.print();
+    Timer timer;
+    timer.reset();
     // bfs(ms);
     dfs(ms);
     // iddfs(ms);
+    double T = timer.stop();
+    printf("Time consumption: %.6f seconds\n", T);
+    
     return 0;
 }

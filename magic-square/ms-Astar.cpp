@@ -6,6 +6,23 @@
 #include <array>
 #include <stack>
 #include <queue>
+#include <unordered_map>
+#include <limits>
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <cerrno>
+#include <cstring>
+#include "./timer.cpp"
+// #if __has_include(<filesystem>)
+// #include <filesystem>
+// namespace fs = std::filesystem;
+// #elif __has_include(<experimental/filesystem>)
+// #include <experimental/filesystem>
+// namespace fs = std::experimental::filesystem;
+// #else
+// #error "Filesystem not supported by this compiler"
+// #endif
 
 #define SIZE 3
 
@@ -23,27 +40,59 @@ public:
     MagicSquare() {}
     void readIn()
     {
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 6; ++i)
         {
             char c;
-            do
+            while (true)
             {
-                int t = scanf("%c", &c);
-                if (t == -1)
+                if (!std::cin.get(c))
                 {
-                    printf("EOF encountered, t = %d\n", t);
+                    int e = errno; // 可能为0（流格式错误不一定设置 errno）
+                    if (std::cin.eof())
+                        std::cerr << "EOF while waiting face id at face index " << i << "\n";
+                    else if (std::cin.fail())
+                        std::cerr << "Stream fail while reading face id (i=" << i << ")\n";
+                    if (e)
+                        std::cerr << "errno=" << e << " (" << std::strerror(e) << ")\n";
                     return;
                 }
-            } while (c != 'b' && c != 'd' && c != 'f' && c != 'l' && c != 'r' && c != 'u');
-            // putchar(c);
-            // putchar('\n');
+                if (c == 'b' || c == 'd' || c == 'f' || c == 'l' || c == 'r' || c == 'u')
+                    break;
+            }
             int index = reflaction[c];
-            scanf("%*s");
-            for (int j = 0; j < SIZE; j++)
+            std::string dummy;
+            if (!(std::cin >> dummy))
             {
-                for (int k = 0; k < SIZE; k++)
+                int e = errno;
+                std::cerr << "Failed to read face header token after face id: " << c << " (face sequence=" << i << ")\n";
+                if (std::cin.eof())
+                    std::cerr << "Reason: EOF encountered.\n";
+                else if (std::cin.bad())
+                    std::cerr << "Reason: stream bad (I/O error).\n";
+                else if (std::cin.fail())
+                    std::cerr << "Reason: format fail.\n";
+                if (e)
+                    std::cerr << "errno=" << e << " (" << std::strerror(e) << ")\n";
+                return;
+            }
+            for (int r = 0; r < SIZE; ++r)
+            {
+                for (int col = 0; col < SIZE; ++col)
                 {
-                    scanf(" %c", &magicSquare[index][j][k]);
+                    if (!(std::cin >> magicSquare[index][r][col]))
+                    {
+                        int e = errno;
+                        std::cerr << "Failed to read cell for face '" << c << "' at (" << r << "," << col << ") faceSeq=" << i << "\n";
+                        if (std::cin.eof())
+                            std::cerr << "Reason: EOF encountered.\n";
+                        else if (std::cin.bad())
+                            std::cerr << "Reason: stream bad (I/O error).\n";
+                        else if (std::cin.fail())
+                            std::cerr << "Reason: format fail.\n";
+                        if (e)
+                            std::cerr << "errno=" << e << " (" << std::strerror(e) << ")\n";
+                        return;
+                    }
                 }
             }
         }
@@ -56,33 +105,30 @@ public:
             {-1, 2, -1},
             {-1, 1, -1}};
 
-        // Print the magic square layout according to order array
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 4; ++i)
         {
-            for (int row = 0; row < SIZE; row++)
+            for (int row = 0; row < SIZE; ++row)
             {
-                for (int j = 0; j < 3; j++)
+                for (int j = 0; j < 3; ++j)
                 {
                     if (order[i][j] == -1)
                     {
-                        // Print empty space
-                        printf("     ");
+                        std::cout << "     ";
                     }
                     else
                     {
-                        // Print the face
                         int faceIndex = order[i][j];
-                        for (int col = 0; col < SIZE; col++)
+                        for (int col = 0; col < SIZE; ++col)
                         {
-                            printf("%c", magicSquare[faceIndex][row][col]);
+                            std::cout << magicSquare[faceIndex][row][col];
                         }
-                        printf(" ");
+                        std::cout << ' ';
                     }
                 }
-                printf("\n");
+                std::cout << '\n';
             }
             if (i < 3)
-                printf("\n"); // Add spacing between rows
+                std::cout << '\n';
         }
     }
     // 顺时针旋转 90°
@@ -207,7 +253,9 @@ public:
                     magicSquare[order[i]][j][munForAll[order[i]]] = temp1[j];
                 }
             }
-            if (order[i] == 3 and order[i + 1] == 2 || order[i] == 2 and order[i + 1] == 3 || order[i] == 4 and order[i + 1] == 0 || order[i] == 0 and order[i + 1] == 4)
+            if (i == 4)
+                continue;
+            if (order[i] == 3 && order[i + 1] == 2 || order[i] == 2 && order[i + 1] == 3 || order[i] == 4 && order[i + 1] == 0 || order[i] == 0 && order[i + 1] == 4)
             {
                 temp1 = temp2;
             }
@@ -293,7 +341,7 @@ public:
             break;
         }
     }
-    bool check()
+    bool isSolved()
     {
         for (int i = 0; i < 6; i++)
         {
@@ -328,17 +376,142 @@ public:
     }
 };
 
-
-void AStar(MagicSquare &ms)
+struct Node
 {
-    // A* algorithm implementation
-    
+    MagicSquare cube;  // 立方体状态
+    std::string state; // 缓存字符串状态，避免重复生成
+    int g_cost;        // 已花费代价
+    int f_cost;        // g + h
+    int parent;        // 父节点索引（-1 表示根）
+    uint8_t move;      // 执行的操作编号 0..8（根节点可设 255）
+    uint8_t dir;       // 方向：0 = 逆时针，1 = 顺时针
+};
+
+struct PQItem
+{
+    int f_cost;
+    int g_cost;
+    int index; // nodes 向量中的索引
+    bool operator<(const PQItem &other) const
+    {
+        // priority_queue 为大顶堆，这里反转使最小 f_cost 优先
+        if (f_cost != other.f_cost)
+            return f_cost > other.f_cost;
+        return g_cost > other.g_cost; // 次级依据：更小 g
+    }
+};
+
+std::priority_queue<PQItem> pq;
+std::unordered_map<std::string, int> gScore; // 记忆最优 g 值
+std::vector<Node> nodes;                     // 存放所有节点，便于父指针回溯
+
+int heuristic(const MagicSquare &ms)
+{
+    // 目前返回 0，未来可直接替换为更强启发式，不影响其它结构
+    return 0;
 }
 
+std::vector<std::pair<int, int>> reconstructPath(int goalIndex)
+{
+    std::vector<std::pair<int, int>> path;
+    for (int i = goalIndex; i != -1; i = nodes[i].parent)
+    {
+        if (nodes[i].parent == -1)
+            break; // 根节点无操作
+        path.push_back({nodes[i].move, nodes[i].dir});
+    }
+    std::reverse(path.begin(), path.end());
+    return path;
+}
+
+std::vector<std::pair<int, int>> AStar(MagicSquare &start)
+{
+    // 清理数据结构
+    gScore.clear();
+    nodes.clear();
+    while (!pq.empty())
+        pq.pop();
+    gScore.reserve(200000); // 预留，减少 rehash
+
+    // 初始化根节点
+    std::string s = start.state();
+    nodes.push_back({start, s, 0, heuristic(start), -1, 255, 0});
+    gScore[s] = 0;
+    pq.push({nodes[0].f_cost, 0, 0});
+
+    while (!pq.empty())
+    {
+        PQItem item = pq.top();
+        pq.pop();
+        int idx = item.index;
+        Node &cur = nodes[idx];
+
+        // 过期节点（有更优 g 已记录）
+        if (cur.g_cost > gScore[cur.state])
+            continue;
+
+        // 目标检测：首次弹出即最优（单一代价 + 一致启发）
+        if (cur.cube.isSolved())
+        {
+            return reconstructPath(idx);
+        }
+
+        // 扩展
+        for (int mv = 0; mv < 9; ++mv)
+        {
+            for (int d = 0; d < 2; ++d)
+            {
+                // 简单剪枝：避免直接反向 (上一步与本步为同一 mv 且方向相反)
+                if (cur.parent != -1 && cur.move == mv && cur.dir != d)
+                    continue;
+
+                MagicSquare next = cur.cube;
+                next.rotate(mv, d == 1);
+                std::string ns = next.state();
+                int tentative_g = cur.g_cost + 1;
+                auto it = gScore.find(ns);
+                if (it != gScore.end() && tentative_g >= it->second)
+                    continue; // 不是更优
+
+                int h = heuristic(next);
+                int f = tentative_g + h;
+                int newIndex;
+                if (it == gScore.end())
+                {
+                    gScore.emplace(ns, tentative_g);
+                }
+                else
+                {
+                    it->second = tentative_g;
+                }
+                nodes.push_back({next, ns, tentative_g, f, idx, static_cast<uint8_t>(mv), static_cast<uint8_t>(d)});
+                newIndex = (int)nodes.size() - 1;
+                pq.push({f, tentative_g, newIndex});
+            }
+        }
+    }
+    // 未找到解，返回空
+    return {};
+}
 int main()
 {
-    freopen("4.in", "r", stdin);
-    freopen("4.out", "w", stdout);
+    std::ios::sync_with_stdio(false);
+    std::cin.tie(nullptr);
+    std::cout << "no input file found";
+    // std::cout << fs::current_path() << std::endl;
+    std::ifstream fin("4.in");
+    if (fin)
+    {
+        std::cin.rdbuf(fin.rdbuf());
+    }
+    else
+    {
+        // std::cout << std::filesystem::current_path() << std::endl;
+        int e = errno; // 打开文件失败时的 errno
+        std::cerr << "Warning: could not open 4.in. Fallback to stdin.\n";
+        if (e)
+            std::cerr << "open errno=" << e << " (" << std::strerror(e) << ")\n";
+    }
 
     reflaction['b'] = 0;
     reflaction['d'] = 1;
@@ -349,5 +522,16 @@ int main()
     MagicSquare ms;
     ms.readIn();
     ms.print();
+
+    Timer timer;
+    timer.reset();
+    auto path = AStar(ms);
+    double t = timer.stop();
+    for (auto &op : path)
+        std::cout << op.first << (op.second ? '+' : '-');
+    std::cout << '\n';
+    std::cout << "Steps: " << path.size() << '\n';
+    std::cout << std::fixed << std::setprecision(6)
+              << "Time consumption: " << t << " seconds\n";
     return 0;
 }
