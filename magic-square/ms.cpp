@@ -514,8 +514,8 @@ int main()
     Timer timer;
     timer.reset();
     // bfs(ms);
-    dfs(ms);
-    // iddfs(ms);
+    // dfs(ms);
+    iddfs(ms);
     double T = timer.stop();
     printf("Time consumption: %.6f seconds\n", T);
     
