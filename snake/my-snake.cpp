@@ -14,6 +14,20 @@ static constexpr int SNAKE_COST_OPEN_SHIELD = 2; // 使用护盾来穿过蛇身�
 static constexpr int SHIELD_COST_THRESHOLD = 20; // 使用护盾所需的最低分数
 static constexpr int TRAP_STEP_COST = 30;        // 陷阱步骤惩罚代价，用于路径规划中软性避开陷阱
 
+// ==================== 食物和物品价值常量 ====================
+static constexpr int GROWTH_FOOD_VALUE = 5;       // 成长食物价值
+static constexpr int TRAP_PENALTY = -10;          // 陷阱扣分（负值）
+static constexpr int KEY_VALUE = 10;              // 钥匙价值
+static constexpr int CHEST_VALUE = 100;           // 宝箱基础价值
+static constexpr int NORMAL_FOOD_MULTIPLIER = 3;  // 普通食物价值倍数（type * 3）
+
+// ==================== 评分和权重常量 ====================
+static constexpr double SNAKE_SAFETY_PENALTY_RATE = 0.5;  // 蛇身穿越安全惩罚率（每个蛇身格子的惩罚倍数）
+static constexpr double CHEST_SCORE_MULTIPLIER = 2.0;     // 宝箱评分倍数
+static constexpr double DEFAULT_CHEST_SCORE = 60.0;       // 默认宝箱分数（当宝箱分数<=0时使用）
+static constexpr double DISTANCE_OFFSET = 1.0;            // 距离计算偏移量，避免除零
+static constexpr int SCORE_DISPLAY_MULTIPLIER = 100;      // 分数显示时的放大倍数（用于日志输出）
+
 // ==================== 数据结构定义 ====================
 // 与游戏引擎格式对齐的结构体
 
@@ -127,19 +141,19 @@ static void read_state(State &s)
         switch (s.items[i].type)
         {
         case -1: // 成长食物
-            s.items[i].value = 5;
+            s.items[i].value = GROWTH_FOOD_VALUE;
             break;
         case -2: // 陷阱 - 根据游戏规则扣除10分
-            s.items[i].value = -10;
+            s.items[i].value = TRAP_PENALTY;
             break;
         case -3: // 钥匙
-            s.items[i].value = 10;
+            s.items[i].value = KEY_VALUE;
             break;
         case -5: // 宝箱
-            s.items[i].value = 100;
+            s.items[i].value = CHEST_VALUE;
             break;
         default: // 普通食物
-            s.items[i].value = s.items[i].type * 3;
+            s.items[i].value = s.items[i].type * NORMAL_FOOD_MULTIPLIER;
             break;
         }
     }
@@ -460,7 +474,8 @@ static BFSOut bfs_grid(const GridMask &M, const State &s, int sy, int sx)
 
             // 计算陷阱惩罚 - 软性避开陷阱但不完全禁止通过
             int extra_cost = 0;
-            if (M.is_trap(ny, nx)) {
+            if (M.is_trap(ny, nx))
+            {
                 extra_cost += TRAP_STEP_COST; // 对陷阱格子施加额外代价，使路径规划倾向于避开
             }
 
@@ -557,8 +572,8 @@ static Choice decide(const State &s)
         double v = it.value;
 
         // 安全性惩罚：穿过蛇身的路径降低评分
-        double safety_penalty = 1.0 + snake_steps * 0.5; // 每个蛇身格子降低50%的效率
-        double sc = v / ((d + 1.0) * safety_penalty);
+        double safety_penalty = DISTANCE_OFFSET + snake_steps * SNAKE_SAFETY_PENALTY_RATE; // 每个蛇身格子降低指定比例的效率
+        double sc = v / ((d + DISTANCE_OFFSET) * safety_penalty);
         cand.push_back({it.pos.y, it.pos.x, sc, d, snake_steps});
 
         // 详细日志：记录候选目标
@@ -580,7 +595,7 @@ static Choice decide(const State &s)
         }
         log_ss << item_type << "@(" << it.pos.y << "," << it.pos.x
                << ")d:" << d << ",s:" << snake_steps
-               << ",sc:" << (int)(sc * 100) << "|";
+               << ",sc:" << (int)(sc * SCORE_DISPLAY_MULTIPLIER) << "|";
     }
 
     if (me.has_key)
@@ -591,13 +606,13 @@ static Choice decide(const State &s)
             auto [ok, d, snake_steps] = reachable(c.pos.y, c.pos.x, -1);
             if (!ok)
                 continue;
-            double safety_penalty = 1.0 + snake_steps * 0.5;
-            double sc = (c.score > 0 ? c.score * 2 : 60.0) / ((d + 1.0) * safety_penalty);
+            double safety_penalty = DISTANCE_OFFSET + snake_steps * SNAKE_SAFETY_PENALTY_RATE;
+            double sc = (c.score > 0 ? c.score * CHEST_SCORE_MULTIPLIER : DEFAULT_CHEST_SCORE) / ((d + DISTANCE_OFFSET) * safety_penalty);
             cand.push_back({c.pos.y, c.pos.x, sc, d, snake_steps});
 
             log_ss << "CHEST@(" << c.pos.y << "," << c.pos.x
                    << ")d:" << d << ",s:" << snake_steps
-                   << ",sc:" << (int)(sc * 100) << "|";
+                   << ",sc:" << (int)(sc * SCORE_DISPLAY_MULTIPLIER) << "|";
         }
     }
 
@@ -671,7 +686,8 @@ static Choice decide(const State &s)
                 continue;
             }
             // 在安全移动分析中避免陷阱 - 只有在所有其他选项都不安全时才会考虑陷阱
-            if (M.is_trap(ny, nx)) {
+            if (M.is_trap(ny, nx))
+            {
                 log_ss << ":TRAP|";
                 continue;
             }
@@ -799,7 +815,7 @@ static Choice decide(const State &s)
     const auto target = cand.front();
 
     log_ss << "TARGET_SELECTED:(" << target.y << "," << target.x
-           << ")sc:" << (int)(target.score * 100) << ",d:" << target.dist
+           << ")sc:" << (int)(target.score * SCORE_DISPLAY_MULTIPLIER) << ",d:" << target.dist
            << ",s:" << target.snake_cost << "|";
 
     // 7) 从目标位置回溯到蛇头，找到第一步应该走的方向
@@ -930,7 +946,8 @@ static Choice decide(const State &s)
     }
 
     // 9.5) 陷阱检测：如果下一步是陷阱且有安全的替代方案，尝试避开
-    if (M.is_trap(cy, cx)) {
+    if (M.is_trap(cy, cx))
+    {
         log_ss << "TRAP_NEXT_STEP:|";
         // 尝试寻找更安全的替代路径
         int choice = last_choice();
