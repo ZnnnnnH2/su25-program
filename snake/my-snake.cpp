@@ -198,7 +198,7 @@ struct GridMask
     bitset<W> blocked_rows[H]; // 墙位置的位掩码
     bitset<W> snake_rows[H];   // 敌方蛇身体位置的位掩码
     bitset<W> danger_rows[H];  // 危险位置的位掩码
-
+    bitset<W> trap_rows[H];    // 陷阱位置的位掩码
     /**
      * 标记位置为墙
      */
@@ -218,14 +218,21 @@ struct GridMask
     }
 
     /**
-     * 标记位置为危险
+     * 标记位置为危险-蛇头周围
      */
     inline void danger(int y, int x)
     {
         if (in_bounds(y, x))
             danger_rows[y].set(x);
     }
-
+    /**
+     * 标记位置为陷阱
+     */
+    inline void trap(int y, int x)
+    {
+        if (in_bounds(y, x))
+            trap_rows[y].set(x);
+    }
     /**
      * 检查位置是否被阻挡
      */
