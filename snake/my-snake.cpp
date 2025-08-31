@@ -629,6 +629,14 @@ static Choice decide(const State &s)
 
             log_ss << direction_name << "@(" << ny << "," << nx << ")";
 
+            // === 防止180度掉头检查 ===
+            int opposite_dir = (me.dir + 2) % 4; // 计算上回合移动方向的相反方向
+            if (k == opposite_dir)
+            {
+                log_ss << ":REVERSE_BLOCKED|";
+                continue;
+            }
+
             // 检查该位置是否安全可移动：
             // - 必须在安全区域内
             // - 不能是阻挡位置（墙、陷阱、宝箱等）
@@ -735,6 +743,14 @@ static Choice decide(const State &s)
 
             log_ss << direction_name << "@(" << ny << "," << nx << ")";
 
+            // === 防止180度掉头检查 ===
+            int opposite_dir = (me.dir + 2) % 4;
+            if (k == opposite_dir)
+            {
+                log_ss << ":REVERSE_BLOCKED|";
+                continue;
+            }
+
             // 只检查基本的边界和阻挡，忽略危险性
             if (in_safe(s.cur, ny, nx) && !M.blocked(ny, nx) && !M.is_snake(ny, nx))
             {
@@ -824,6 +840,18 @@ static Choice decide(const State &s)
         log_ss << "ERROR:NO_DIRECTION|";
         str_info += log_ss.str();
         // 错误处理：优先开启护盾，否则默认向左移动
+        int choice = last_choice();
+        return {choice};
+    }
+
+    // === 防止180度掉头检查 ===
+    // 蛇不能直接向相反方向移动（掉头）
+    int opposite_dir = (me.dir + 2) % 4; // 计算上回合移动方向的相反方向
+    if (dir == opposite_dir)
+    {
+        log_ss << "ERROR:REVERSE_DIRECTION_BLOCKED,prev_dir:" << me.dir << ",attempt_dir:" << dir << "|";
+        str_info += log_ss.str();
+        // 使用应急策略选择其他方向
         int choice = last_choice();
         return {choice};
     }
