@@ -12,6 +12,7 @@ static constexpr int SNAKE_COST_NO_SHIELD = 100; // 无护盾时穿过蛇身的�
 static constexpr int SNAKE_COST_WITH_SHIELD = 0; // 有护盾时穿过蛇身的代价
 static constexpr int SNAKE_COST_OPEN_SHIELD = 2; // 使用护盾来穿过蛇身的代价
 static constexpr int SHIELD_COST_THRESHOLD = 20; // 使用护盾所需的最低分数
+static constexpr int TRAP_STEP_COST = 30;        // 陷阱步骤惩罚代价，用于路径规划中软性避开陷阱
 
 // ==================== 数据结构定义 ====================
 // 与游戏引擎格式对齐的结构体
@@ -128,8 +129,8 @@ static void read_state(State &s)
         case -1: // 成长食物
             s.items[i].value = 5;
             break;
-        case -2: // 陷阱
-            s.items[i].value = -20;
+        case -2: // 陷阱 - 根据游戏规则扣除10分
+            s.items[i].value = -10;
             break;
         case -3: // 钥匙
             s.items[i].value = 10;
@@ -457,7 +458,13 @@ static BFSOut bfs_grid(const GridMask &M, const State &s, int sy, int sx)
                 }
             }
 
-            int new_total_cost = new_dist + new_snake_cost * SNAKE_COST_WEIGHT; // 蛇身代价权重
+            // 计算陷阱惩罚 - 软性避开陷阱但不完全禁止通过
+            int extra_cost = 0;
+            if (M.is_trap(ny, nx)) {
+                extra_cost += TRAP_STEP_COST; // 对陷阱格子施加额外代价，使路径规划倾向于避开
+            }
+
+            int new_total_cost = new_dist + new_snake_cost * SNAKE_COST_WEIGHT + extra_cost;
 
             // 如果找到更好的路径，更新
             if (new_total_cost < out.dist[ny][nx] + out.snake_cost[ny][nx] * SNAKE_COST_WEIGHT)
@@ -642,6 +649,7 @@ static Choice decide(const State &s)
             // - 不能是阻挡位置（墙、陷阱、宝箱等）
             // - 不能是危险位置（敌蛇头附近）
             // - 不能是敌蛇身体
+            // - 优先避免陷阱（在安全移动分析中）
             if (!in_safe(s.cur, ny, nx))
             {
                 log_ss << ":UNSAFE|";
@@ -660,6 +668,11 @@ static Choice decide(const State &s)
             if (M.is_snake(ny, nx))
             {
                 log_ss << ":SNAKE_BODY|";
+                continue;
+            }
+            // 在安全移动分析中避免陷阱 - 只有在所有其他选项都不安全时才会考虑陷阱
+            if (M.is_trap(ny, nx)) {
+                log_ss << ":TRAP|";
                 continue;
             }
 
@@ -914,6 +927,16 @@ static Choice decide(const State &s)
             int choice = last_choice();
             return {choice};
         }
+    }
+
+    // 9.5) 陷阱检测：如果下一步是陷阱且有安全的替代方案，尝试避开
+    if (M.is_trap(cy, cx)) {
+        log_ss << "TRAP_NEXT_STEP:|";
+        // 尝试寻找更安全的替代路径
+        int choice = last_choice();
+        // 注意：last_choice 中的绝望移动分析(DESPERATE_MOVE_ANALYSIS)仍然允许踩陷阱，
+        // 这样当所有其他选项都比死亡更糟糕时，蛇仍然可以选择踩陷阱求生
+        return {choice};
     }
 
     // 10) 正常移动：所有检查通过，执行计划的移动
