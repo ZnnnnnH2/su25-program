@@ -1,0 +1,365 @@
+--- a/tictactoe-visualization.cpp
++++ b/tictactoe-visualization.cpp
+@@
+-    sf::RenderWindow window;
+-    sf::Font font;
++    sf::RenderWindow window;
++    sf::Font font;
+@@
+-    const int WINDOW_SIZE = 600;
+-    const int GRID_SIZE = 400;
+-    const int GRID_OFFSET = 100;
+-    const int CELL_SIZE = GRID_SIZE / 3;
++    // 可调式布局参数（窗口缩放时会动态更新）
++    int WINDOW_SIZE = 720;
++    int GRID_SIZE = 480;
++    int GRID_OFFSET = 120;
++    int CELL_SIZE = GRID_SIZE / 3;
++
++    // 主题设置（按 D 键切换明/暗）
++    struct Theme {
++        sf::Color bg;
++        sf::Color fg;
++        sf::Color grid;
++        sf::Color xColor;
++        sf::Color oColor;
++        sf::Color hint;
++    } themeLight {sf::Color::White, sf::Color::Black, sf::Color::Black, sf::Color(220, 20, 60), sf::Color(30, 144, 255), sf::Color(0,0,0,40)},
++      themeDark  {sf::Color(30, 30, 35), sf::Color(240,240,240), sf::Color(200,200,210), sf::Color(255,105,97), sf::Color(135,206,250), sf::Color(255,255,255,30)};
++    Theme theme = themeLight;
++
++    // 复用图形对象，避免每帧构造临时对象
++    std::array<sf::RectangleShape, 4> gridLines; // 2 垂直 + 2 水平
++    sf::RectangleShape border;
++    // 棋子文本在落子时更新，渲染时直接 draw
++    std::array<std::array<sf::Text, 3>, 3> pieceTexts;
+@@
+-public:
+-    TicTacToeGUI() : window(sf::VideoMode(WINDOW_SIZE, WINDOW_SIZE), "井字棋 AI 对战"),
++public:
++    TicTacToeGUI() :
++                     // 抗锯齿 + VSync
++                     window([&]{
++                         sf::ContextSettings s; s.antialiasingLevel = 8;
++                         return sf::RenderWindow(sf::VideoMode(720, 720),
++                                                 "井字棋 AI 对战",
++                                                 sf::Style::Default, s);
++                     }()),
+                      game_started(false), is_human_turn(true), ai_thinking(false)
+     {
+-        window.setFramerateLimit(60);
++        // 帧率交给垂直同步管理，更稳定
++        window.setVerticalSyncEnabled(true);
++        // 初次计算布局与视图
++        applyLetterboxView(window.getSize().x, window.getSize().y);
++        rebuildPrimitives();
+ 
+         // 加载字体（使用系统默认字体）
+         if (!font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
+         {
+             // 如果找不到字体，程序仍然能运行，只是可能显示不正常
+             std::cout << "无法加载字体，文字可能显示异常\n";
+         }
++        // 初始化棋子文本的字体与基准大小
++        for (int i=0;i<3;i++) for (int j=0;j<3;j++){
++            pieceTexts[i][j].setFont(font);
++            pieceTexts[i][j].setCharacterSize( std::max(28, GRID_SIZE/3 - 40) );
++        }
+     }
+@@
+     void handleEvents()
+     {
+         sf::Event event;
+         while (window.pollEvent(event))
+         {
+             if (event.type == sf::Event::Closed)
+             {
+                 window.close();
+             }
++            if (event.type == sf::Event::Resized) {
++                applyLetterboxView(event.size.width, event.size.height);
++                rebuildPrimitives();
++                refreshPieces(); // 重新排版棋子文本
++            }
+ 
+             if (!game_started)
+             {
+                 if (event.type == sf::Event::KeyPressed)
+                 {
+                     if (event.key.code == sf::Keyboard::X)
+                     {
+                         startGame('X');
+                     }
+                     else if (event.key.code == sf::Keyboard::O)
+                     {
+                         startGame('O');
++                    } else if (event.key.code == sf::Keyboard::D) {
++                        toggleTheme();
+                     }
+                 }
+             }
+             else if (is_human_turn && !ai_thinking)
+             {
+                 if (event.type == sf::Event::MouseButtonPressed)
+                 {
+                     if (event.mouseButton.button == sf::Mouse::Left)
+                     {
+                         handleMouseClick(event.mouseButton.x, event.mouseButton.y);
+                     }
+                 }
+ 
+                 if (event.type == sf::Event::KeyPressed)
+                 {
+                     if (event.key.code == sf::Keyboard::R)
+                     {
+                         resetGame();
++                    } else if (event.key.code == sf::Keyboard::D) {
++                        toggleTheme();
+                     }
+                 }
+             }
+         }
+     }
+@@
+-            current.board[row][col] = human_player;
+-            current.last_move = {row, col};
++            current.board[row][col] = human_player;
++            current.last_move = {row, col};
++            updateOnePiece(row, col); // 只重建该格文本
+ 
+             if (evaluate_board(current.board) == 0)
+             {
+                 is_human_turn = false;
+                 ai_thinking = true;
+                 ai_timer.restart();
+             }
+         }
+     }
+@@
+-        if (!state_space.empty() && state_space[0].best_move_index != -1)
++        if (!state_space.empty() && state_space[0].best_move_index != -1)
+         {
+             int best_idx = state_space[0].best_move_index;
+             Move m = state_space[best_idx].last_move;
+             current.board[m.row][m.col] = ai_player;
+             current.last_move = m;
++            updateOnePiece(m.row, m.col);
+ 
+             std::cout << "AI 落子在 (" << m.row << "," << m.col << ") [评分: "
+                       << state_space[0].minimax << "]\n";
+         }
+@@
+     void resetGame()
+     {
+         current = GameState();
+         is_human_turn = (human_player == 'X');
+         ai_thinking = false;
++        // 清空所有棋子文本
++        for (int i=0;i<3;i++) for (int j=0;j<3;j++){
++            pieceTexts[i][j].setString("");
++        }
+ 
+         if (!is_human_turn)
+         {
+             ai_thinking = true;
+             ai_timer.restart();
+         }
+     }
+ 
+     void render()
+     {
+-        window.clear(sf::Color::White);
++        window.clear(theme.bg);
+ 
+         if (!game_started)
+         {
+             renderStartScreen();
+         }
+         else
+         {
+             renderGame();
+         }
+ 
+         window.display();
+     }
+ 
+     void renderStartScreen()
+     {
+-        sf::Text title("井字棋 AI 对战", font, 40);
+-        title.setFillColor(sf::Color::Black);
++        sf::Text title("井字棋 AI 对战", font, 40);
++        title.setFillColor(theme.fg);
+         title.setPosition(WINDOW_SIZE / 2 - title.getGlobalBounds().width / 2, 200);
+         window.draw(title);
+ 
+-        sf::Text instruction1("按 X 键选择 X (先手)", font, 24);
+-        instruction1.setFillColor(sf::Color::Black);
++        sf::Text instruction1("按 X 键选择 X (先手)", font, 24);
++        instruction1.setFillColor(theme.fg);
+         instruction1.setPosition(WINDOW_SIZE / 2 - instruction1.getGlobalBounds().width / 2, 300);
+         window.draw(instruction1);
+ 
+-        sf::Text instruction2("按 O 键选择 O (后手)", font, 24);
+-        instruction2.setFillColor(sf::Color::Black);
++        sf::Text instruction2("按 O 键选择 O (后手)", font, 24);
++        instruction2.setFillColor(theme.fg);
+         instruction2.setPosition(WINDOW_SIZE / 2 - instruction2.getGlobalBounds().width / 2, 340);
+         window.draw(instruction2);
++
++        sf::Text tip("按 D 切换明/暗主题", font, 18);
++        tip.setFillColor(theme.fg);
++        tip.setPosition(WINDOW_SIZE / 2 - tip.getGlobalBounds().width / 2, 380);
++        window.draw(tip);
+     }
+ 
+     void renderGame()
+     {
+-        // 绘制棋盘网格
+-        for (int i = 1; i < 3; i++)
+-        {
+-            // 垂直线
+-            sf::RectangleShape vline(sf::Vector2f(3, GRID_SIZE));
+-            vline.setPosition(GRID_OFFSET + i * CELL_SIZE, GRID_OFFSET);
+-            vline.setFillColor(sf::Color::Black);
+-            window.draw(vline);
+-
+-            // 水平线
+-            sf::RectangleShape hline(sf::Vector2f(GRID_SIZE, 3));
+-            hline.setPosition(GRID_OFFSET, GRID_OFFSET + i * CELL_SIZE);
+-            hline.setFillColor(sf::Color::Black);
+-            window.draw(hline);
+-        }
+-
+-        // 绘制棋盘边框
+-        sf::RectangleShape border;
+-        border.setSize(sf::Vector2f(GRID_SIZE, GRID_SIZE));
+-        border.setPosition(GRID_OFFSET, GRID_OFFSET);
+-        border.setFillColor(sf::Color::Transparent);
+-        border.setOutlineColor(sf::Color::Black);
+-        border.setOutlineThickness(3);
+-        window.draw(border);
++        // 绘制棋盘（复用对象，颜色来自主题）
++        for (auto& l : gridLines) {
++            l.setFillColor(theme.grid);
++            window.draw(l);
++        }
++        border.setOutlineColor(theme.grid);
++        window.draw(border);
+ 
+         // 绘制棋子
+         for (int i = 0; i < 3; i++)
+         {
+             for (int j = 0; j < 3; j++)
+             {
+-                if (current.board[i][j] != ' ')
+-                {
+-                    sf::Text piece(std::string(1, current.board[i][j]), font, 80);
+-                    if (current.board[i][j] == 'X')
+-                    {
+-                        piece.setFillColor(sf::Color::Red);
+-                    }
+-                    else
+-                    {
+-                        piece.setFillColor(sf::Color::Blue);
+-                    }
+-
+-                    float x = GRID_OFFSET + j * CELL_SIZE + CELL_SIZE / 2 - piece.getGlobalBounds().width / 2;
+-                    float y = GRID_OFFSET + i * CELL_SIZE + CELL_SIZE / 2 - piece.getGlobalBounds().height / 2;
+-                    piece.setPosition(x, y);
+-                    window.draw(piece);
+-                }
++                if (current.board[i][j] != ' ')
++                    window.draw(pieceTexts[i][j]);
+             }
+         }
+ 
+         // 显示游戏状态
+         renderGameStatus();
+     }
+ 
+     void renderGameStatus()
+     {
+         std::string status;
+         int game_status = evaluate_board(current.board);
+@@
+-        sf::Text statusText(status, font, 20);
+-        statusText.setFillColor(sf::Color::Black);
++        sf::Text statusText(status, font, 20);
++        statusText.setFillColor(theme.fg);
+         statusText.setPosition(WINDOW_SIZE / 2 - statusText.getGlobalBounds().width / 2, 50);
+         window.draw(statusText);
+ 
+         // 显示玩家信息
+-        std::string playerInfo = "你: " + std::string(1, human_player) + "  AI: " + std::string(1, ai_player);
+-        sf::Text infoText(playerInfo, font, 16);
+-        infoText.setFillColor(sf::Color::Black);
++        std::string playerInfo = "你: " + std::string(1, human_player) + "  AI: " + std::string(1, ai_player);
++        sf::Text infoText(playerInfo, font, 16);
++        infoText.setFillColor(theme.fg);
+         infoText.setPosition(20, WINDOW_SIZE - 30);
+         window.draw(infoText);
+     }
++
++    // ====== 新增：实用小函数 ======
++    void toggleTheme(){
++        theme = (theme.bg == themeLight.bg) ? themeDark : themeLight;
++    }
++
++    // 自适应缩放：保持棋盘 1:1 显示，采用 letterbox，避免拉伸
++    void applyLetterboxView(unsigned w, unsigned h){
++        sf::View v(sf::FloatRect(0.f, 0.f, 720.f, 720.f));
++        float windowRatio = (float)w / (float)h;
++        float viewRatio   = 1.f; // 720/720
++        float sizeX = 1.f, sizeY = 1.f;
++        float posX  = 0.f, posY  = 0.f;
++        if (windowRatio > viewRatio){ sizeX = viewRatio / windowRatio; posX = (1.f - sizeX)/2.f; }
++        else if (windowRatio < viewRatio){ sizeY = windowRatio / viewRatio; posY = (1.f - sizeY)/2.f; }
++        v.setViewport({posX, posY, sizeX, sizeY});
++        window.setView(v);
++        // 依据视图逻辑空间重新估算布局
++        WINDOW_SIZE = 720;
++        GRID_SIZE   = 480;
++        GRID_OFFSET = (WINDOW_SIZE - GRID_SIZE)/2; // 居中
++        CELL_SIZE   = GRID_SIZE/3;
++    }
++
++    // 重新构建棋盘几何（窗口尺寸/主题变化时）
++    void rebuildPrimitives(){
++        // 线条用整数坐标 + 偶数粗细，避免模糊
++        const float thickness = 4.f;
++        for (auto& l : gridLines) l.setSize({thickness, (float)GRID_SIZE});
++        // 垂直线
++        gridLines[0].setPosition(GRID_OFFSET + 1*CELL_SIZE - thickness/2, GRID_OFFSET);
++        gridLines[1].setPosition(GRID_OFFSET + 2*CELL_SIZE - thickness/2, GRID_OFFSET);
++        // 水平线
++        gridLines[2].setSize({(float)GRID_SIZE, thickness});
++        gridLines[3].setSize({(float)GRID_SIZE, thickness});
++        gridLines[2].setPosition(GRID_OFFSET, GRID_OFFSET + 1*CELL_SIZE - thickness/2);
++        gridLines[3].setPosition(GRID_OFFSET, GRID_OFFSET + 2*CELL_SIZE - thickness/2);
++        // 边框
++        border.setSize({(float)GRID_SIZE, (float)GRID_SIZE});
++        border.setPosition(GRID_OFFSET, GRID_OFFSET);
++        border.setFillColor(sf::Color::Transparent);
++        border.setOutlineThickness(thickness);
++        // 字号根据格子动态调整
++        int ch = std::max(28, CELL_SIZE - 40);
++        for (int i=0;i<3;i++) for (int j=0;j<3;j++)
++            pieceTexts[i][j].setCharacterSize(ch);
++        refreshPieces();
++    }
++
++    // 把 current.board 的内容同步到 pieceTexts 的字形与坐标
++    void refreshPieces(){
++        for (int i=0;i<3;i++) for (int j=0;j<3;j++)
++            updateOnePiece(i,j);
++    }
++    void updateOnePiece(int r, int c){
++        if (current.board[r][c] == ' '){ pieceTexts[r][c].setString(""); return; }
++        std::string s(1, current.board[r][c]);
++        pieceTexts[r][c].setString(s);
++        pieceTexts[r][c].setFillColor( (s=="X") ? theme.xColor : theme.oColor );
++        auto bounds = pieceTexts[r][c].getLocalBounds();
++        float x = GRID_OFFSET + c*CELL_SIZE + (CELL_SIZE - bounds.width)/2.f - bounds.left;
++        float y = GRID_OFFSET + r*CELL_SIZE + (CELL_SIZE - bounds.height)/2.f - bounds.top;
++        pieceTexts[r][c].setPosition(x, y);
++    }
