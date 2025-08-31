@@ -500,9 +500,12 @@ static Choice decide(const State &s)
     const int sy = me.head().y, sx = me.head().x; // 当前蛇头坐标
 
     stringstream log_ss; // 使用 stringstream 高效构建日志
-    log_ss << "|T" << s.current_ticks << "|P" << sy << "," << sx
-           << "|S" << me.score << "|L" << me.length
-           << "|CD" << me.shield_cd << "|ST" << me.shield_time;
+    log_ss << "TICK:" << s.current_ticks << "|"
+           << "POSITION:" << sy << "," << sx << "|"
+           << "SCORE:" << me.score << "|"
+           << "LENGTH:" << me.length << "|"
+           << "SHIELD_COOLDOWN:" << me.shield_cd << "|"
+           << "SHIELD_TIME:" << me.shield_time << "|";
 
     // 2) 以当前蛇头为起点做一次全图 BFS
     BFSOut G = bfs_grid(M, s, sy, sx);
@@ -529,6 +532,8 @@ static Choice decide(const State &s)
     vector<Target> cand;
     cand.reserve(64);
 
+    log_ss << "ITEMS_ANALYSIS:|";
+
     // 4) 枚举地图上可作为目标的物品，构建候选列表
     for (const auto &it : s.items)
     {
@@ -549,13 +554,31 @@ static Choice decide(const State &s)
         double sc = v / ((d + 1.0) * safety_penalty);
         cand.push_back({it.pos.y, it.pos.x, sc, d, snake_steps});
 
-        // 精简日志：记录候选目标
-        log_ss << "|I" << it.type << "@" << it.pos.y << "," << it.pos.x
-               << ":" << (int)(sc * 100);
+        // 详细日志：记录候选目标
+        string item_type;
+        switch (it.type)
+        {
+        case -1:
+            item_type = "GROWTH_FOOD";
+            break;
+        case -3:
+            item_type = "KEY";
+            break;
+        case -5:
+            item_type = "CHEST";
+            break;
+        default:
+            item_type = "NORMAL_FOOD(" + to_string(it.type) + ")";
+            break;
+        }
+        log_ss << item_type << "@(" << it.pos.y << "," << it.pos.x
+               << ")d:" << d << ",s:" << snake_steps
+               << ",sc:" << (int)(sc * 100) << "|";
     }
 
     if (me.has_key)
     {
+        log_ss << "CHEST_ANALYSIS:|";
         for (const auto &c : s.chests)
         {
             auto [ok, d, snake_steps] = reachable(c.pos.y, c.pos.x, -1);
@@ -565,33 +588,72 @@ static Choice decide(const State &s)
             double sc = (c.score > 0 ? c.score * 2 : 60.0) / ((d + 1.0) * safety_penalty);
             cand.push_back({c.pos.y, c.pos.x, sc, d, snake_steps});
 
-            // 精简日志：记录宝箱目标
-            log_ss << "|C@" << c.pos.y << "," << c.pos.x
-                   << ":" << (int)(sc * 100);
+            log_ss << "CHEST@(" << c.pos.y << "," << c.pos.x
+                   << ")d:" << d << ",s:" << snake_steps
+                   << ",sc:" << (int)(sc * 100) << "|";
         }
     }
 
-    log_ss << "|CD:" << cand.size();
+    log_ss << "CANDIDATES_COUNT:" << cand.size() << "|";
 
     auto last_choice = [&]()
     {
-        log_ss << "|SUR"; // Survival mode
+        log_ss << "SURVIVAL_MODE:|";
 
         // === 策略1：寻找可达性最好的安全移动方向 ===
         int bestDir = -1;   // 最佳移动方向（-1表示未找到）
         int bestReach = -1; // 最佳方向的可达性得分
+
+        log_ss << "SAFE_MOVE_ANALYSIS:|";
         // 遍历四个可能的移动方向
         for (int k = 0; k < 4; ++k)
         {
             int ny = sy + DY[k], nx = sx + DX[k]; // 计算下一步位置
+
+            string direction_name;
+            switch (k)
+            {
+            case 0:
+                direction_name = "LEFT";
+                break;
+            case 1:
+                direction_name = "UP";
+                break;
+            case 2:
+                direction_name = "RIGHT";
+                break;
+            case 3:
+                direction_name = "DOWN";
+                break;
+            }
+
+            log_ss << direction_name << "@(" << ny << "," << nx << ")";
 
             // 检查该位置是否安全可移动：
             // - 必须在安全区域内
             // - 不能是阻挡位置（墙、陷阱、宝箱等）
             // - 不能是危险位置（敌蛇头附近）
             // - 不能是敌蛇身体
-            if (!in_safe(s.cur, ny, nx) || M.blocked(ny, nx) || M.is_danger(ny, nx) || M.is_snake(ny, nx))
+            if (!in_safe(s.cur, ny, nx))
+            {
+                log_ss << ":UNSAFE|";
                 continue;
+            }
+            if (M.blocked(ny, nx))
+            {
+                log_ss << ":BLOCKED|";
+                continue;
+            }
+            if (M.is_danger(ny, nx))
+            {
+                log_ss << ":DANGEROUS|";
+                continue;
+            }
+            if (M.is_snake(ny, nx))
+            {
+                log_ss << ":SNAKE_BODY|";
+                continue;
+            }
 
             // 计算该位置的"可达性"：统计从该位置能继续移动的方向数量
             int deg = 0; // 可达方向计数器
@@ -602,6 +664,8 @@ static Choice decide(const State &s)
                 if (in_safe(s.cur, py, px) && !M.blocked(py, px) && !M.is_snake(py, px))
                     ++deg;
             }
+
+            log_ss << ":SAFE,r:" << deg << "|";
 
             // 选择可达性最好的方向（避免走入死胡同）
             if (deg > bestReach)
@@ -614,7 +678,24 @@ static Choice decide(const State &s)
         // 如果找到了安全的移动方向，立即执行
         if (bestDir != -1)
         {
-            log_ss << "|SM:" << ACT[bestDir] << "," << bestReach;
+            string best_direction;
+            switch (bestDir)
+            {
+            case 0:
+                best_direction = "LEFT";
+                break;
+            case 1:
+                best_direction = "UP";
+                break;
+            case 2:
+                best_direction = "RIGHT";
+                break;
+            case 3:
+                best_direction = "DOWN";
+                break;
+            }
+            log_ss << "SAFE_MOVE_CHOSEN:" << best_direction << ",a:" << ACT[bestDir]
+                   << ",r:" << bestReach << "|";
             str_info += log_ss.str();
             return ACT[bestDir];
         }
@@ -623,28 +704,53 @@ static Choice decide(const State &s)
         // 条件：护盾冷却完毕且当前未开启护盾
         if (me.shield_cd == 0 && me.shield_time == 0)
         {
-            log_ss << "|SS";
+            log_ss << "SHIELD_ACTIVATION:|";
             str_info += log_ss.str();
             return 4; // 动作4 = 开启护盾
         }
 
         // === 策略3：最后的移动尝试（忽略危险性检查） ===
         // 当连护盾都开不了时，尝试任何可能的移动（即使有风险）
+        log_ss << "DESPERATE_MOVE_ANALYSIS:|";
         for (int k = 0; k < 4; ++k)
         {
             int ny = sy + DY[k], nx = sx + DX[k];
+
+            string direction_name;
+            switch (k)
+            {
+            case 0:
+                direction_name = "LEFT";
+                break;
+            case 1:
+                direction_name = "UP";
+                break;
+            case 2:
+                direction_name = "RIGHT";
+                break;
+            case 3:
+                direction_name = "DOWN";
+                break;
+            }
+
+            log_ss << direction_name << "@(" << ny << "," << nx << ")";
+
             // 只检查基本的边界和阻挡，忽略危险性
             if (in_safe(s.cur, ny, nx) && !M.blocked(ny, nx) && !M.is_snake(ny, nx))
             {
-                log_ss << "|DM:" << ACT[k];
+                log_ss << ":DESPERATE_MOVE_CHOSEN|";
                 str_info += log_ss.str();
                 return ACT[k];
+            }
+            else
+            {
+                log_ss << ":NOT_VIABLE|";
             }
         }
 
         // === 策略4：绝望的护盾尝试 ===
         // 如果连基本移动都不可能，强制尝试开启护盾（即使在冷却中）
-        log_ss << "|FS";
+        log_ss << "FORCED_SHIELD:|";
         str_info += log_ss.str();
         return 4;
     };
@@ -663,8 +769,9 @@ static Choice decide(const State &s)
         return a.dist < b.dist; });
     const auto target = cand.front();
 
-    log_ss << "|TG@" << target.y << "," << target.x
-           << ":" << (int)(target.score * 100) << "," << target.dist;
+    log_ss << "TARGET_SELECTED:(" << target.y << "," << target.x
+           << ")sc:" << (int)(target.score * 100) << ",d:" << target.dist
+           << ",s:" << target.snake_cost << "|";
 
     // 7) 从目标位置回溯到蛇头，找到第一步应该走的方向
     int ty = target.y, tx = target.x; // 目标位置坐标
@@ -672,7 +779,7 @@ static Choice decide(const State &s)
     // 检查目标位置是否可达（是否有父节点）
     if (G.parent[ty][tx] == -1)
     {
-        log_ss << "|ERR:UNREACH";
+        log_ss << "ERROR:TARGET_UNREACHABLE|";
         str_info += log_ss.str();
         // 错误处理：如果护盾可用就开启，否则尝试向左移动
         int choice = last_choice();
@@ -681,12 +788,15 @@ static Choice decide(const State &s)
 
     // === 路径回溯算法：从目标回溯到蛇头的下一步位置 ===
     int cy = ty, cx = tx; // 当前回溯位置，从目标开始
+    log_ss << "PATH_BACKTRACK:|";
 
     // 沿着父节点链向蛇头方向回溯
     while (!(cy == sy && cx == sx)) // 直到回溯到蛇头位置
     {
         int back = G.parent[cy][cx];                // 获取当前位置的父节点方向
         int py = cy + DY[back], px = cx + DX[back]; // 计算父节点位置
+
+        log_ss << "(" << cy << "," << cx << ")<-(" << py << "," << px << ")|";
 
         // 如果父节点就是蛇头，说明找到了下一步要去的位置
         if (py == sy && px == sx)
@@ -711,20 +821,38 @@ static Choice decide(const State &s)
     // 检查是否成功找到移动方向
     if (dir == -1)
     {
-        log_ss << "|ERR:NODIR";
+        log_ss << "ERROR:NO_DIRECTION|";
         str_info += log_ss.str();
         // 错误处理：优先开启护盾，否则默认向左移动
         int choice = last_choice();
         return {choice};
     }
 
-    log_ss << "|NX:" << ACT[dir] << "@" << cy << "," << cx;
+    string next_direction;
+    switch (dir)
+    {
+    case 0:
+        next_direction = "LEFT";
+        break;
+    case 1:
+        next_direction = "UP";
+        break;
+    case 2:
+        next_direction = "RIGHT";
+        break;
+    case 3:
+        next_direction = "DOWN";
+        break;
+    }
+
+    log_ss << "NEXT_STEP:" << next_direction << ",a:" << ACT[dir]
+           << "@(" << cy << "," << cx << ")|";
 
     // 8) 移动前的安全性检查：危险位置检测
     // 如果下一步位置是危险区域（敌蛇头附近）且没有护盾保护
     if (M.is_danger(cy, cx) && me.shield_cd == 0 && me.shield_time == 0)
     {
-        log_ss << "|DNG";
+        log_ss << "DANGER_DETECTED:|";
         str_info += log_ss.str();
         int choice = last_choice();
         return {choice};
@@ -733,11 +861,12 @@ static Choice decide(const State &s)
     // 9) 蛇身穿越检测：智能护盾使用策略
     if (M.is_snake(cy, cx)) // 如果下一步位置有敌方蛇身
     {
+        log_ss << "SNAKE_BODY_DETECTED:|";
         // === 情况1：当前已有护盾激活 ===
         if (me.shield_time > 0)
         {
             // 直接移动，利用现有护盾穿过蛇身
-            log_ss << "|SP:" << ACT[dir];
+            log_ss << "SHIELD_PASS:" << next_direction << ",a:" << ACT[dir] << "|";
             str_info += log_ss.str();
             return {ACT[dir]};
         }
@@ -745,14 +874,14 @@ static Choice decide(const State &s)
         else if (me.shield_cd == 0) // 护盾冷却完毕
         {
             // 激活护盾为下一回合穿越蛇身做准备
-            log_ss << "|SN";
+            log_ss << "SHIELD_PREPARE:a:4|";
             str_info += log_ss.str();
             return {4}; // 开启护盾
         }
         // === 情况3：护盾不可用的绝望情况 ===
         else
         {
-            log_ss << "|SB";
+            log_ss << "SHIELD_UNAVAILABLE:|";
             str_info += log_ss.str();
             int choice = last_choice();
             return {choice};
@@ -760,7 +889,7 @@ static Choice decide(const State &s)
     }
 
     // 10) 正常移动：所有检查通过，执行计划的移动
-    log_ss << "|M:" << ACT[dir];
+    log_ss << "NORMAL_MOVE:" << next_direction << ",a:" << ACT[dir] << "|";
     str_info += log_ss.str();
     return {ACT[dir]}; // 返回对应的移动动作
 }
