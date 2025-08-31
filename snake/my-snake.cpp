@@ -15,18 +15,18 @@ static constexpr int SHIELD_COST_THRESHOLD = 20; // 使用护盾所需的最低�
 static constexpr int TRAP_STEP_COST = 30;        // 陷阱步骤惩罚代价，用于路径规划中软性避开陷阱
 
 // ==================== 食物和物品价值常量 ====================
-static constexpr int GROWTH_FOOD_VALUE = 5;       // 成长食物价值
-static constexpr int TRAP_PENALTY = -10;          // 陷阱扣分（负值）
-static constexpr int KEY_VALUE = 10;              // 钥匙价值
-static constexpr int CHEST_VALUE = 100;           // 宝箱基础价值
-static constexpr int NORMAL_FOOD_MULTIPLIER = 3;  // 普通食物价值倍数（type * 3）
+static constexpr int GROWTH_FOOD_VALUE = 10;     // 成长食物价值
+static constexpr int TRAP_PENALTY = -10;         // 陷阱扣分（负值）
+static constexpr int KEY_VALUE = 50;             // 钥匙价值
+static constexpr int CHEST_VALUE = 100;          // 宝箱基础价值
+static constexpr int NORMAL_FOOD_MULTIPLIER = 3; // 普通食物价值倍数（type * 4）
 
 // ==================== 评分和权重常量 ====================
-static constexpr double SNAKE_SAFETY_PENALTY_RATE = 0.5;  // 蛇身穿越安全惩罚率（每个蛇身格子的惩罚倍数）
-static constexpr double CHEST_SCORE_MULTIPLIER = 2.0;     // 宝箱评分倍数
-static constexpr double DEFAULT_CHEST_SCORE = 60.0;       // 默认宝箱分数（当宝箱分数<=0时使用）
-static constexpr double DISTANCE_OFFSET = 1.0;            // 距离计算偏移量，避免除零
-static constexpr int SCORE_DISPLAY_MULTIPLIER = 100;      // 分数显示时的放大倍数（用于日志输出）
+static constexpr double SNAKE_SAFETY_PENALTY_RATE = 0.5; // 蛇身穿越安全惩罚率（每个蛇身格子的惩罚倍数）
+static constexpr double CHEST_SCORE_MULTIPLIER = 2.0;    // 宝箱评分倍数
+static constexpr double DEFAULT_CHEST_SCORE = 60.0;      // 默认宝箱分数（当宝箱分数<=0时使用）
+static constexpr double DISTANCE_OFFSET = 1.0;           // 距离计算偏移量，避免除零
+static constexpr int SCORE_DISPLAY_MULTIPLIER = 100;     // 分数显示时的放大倍数（用于日志输出）
 
 // ==================== 数据结构定义 ====================
 // 与游戏引擎格式对齐的结构体
