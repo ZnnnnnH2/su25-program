@@ -183,6 +183,13 @@ public:
                 continue;
             }
 
+            // 绝望移动中标记的子 token
+            if (token.find(":TRAP_DESPERATE_CHOSEN") != string::npos)
+            {
+                entry.action_type = "DESPERATE_MOVE"; // 保持类别
+                continue;
+            }
+
             if (token == "FORCED_SHIELD:")
             {
                 entry.action_type = "FORCED_SHIELD";
@@ -243,7 +250,15 @@ public:
 
             if (token.find("NORMAL_MOVE:") == 0)
             {
-                entry.final_action = token;
+                // 如果此前处于绝望模式，则细化描述
+                if (entry.action_type == "DESPERATE_MOVE")
+                {
+                    entry.final_action = token + "(DESPERATE)";
+                }
+                else
+                {
+                    entry.final_action = token;
+                }
                 entry.action_type = "NORMAL_MOVE";
                 continue;
             }
@@ -448,57 +463,56 @@ public:
 int main(int argc, char *argv[])
 {
     LogParser parser;
-
+    string filename;
     if (argc > 1)
     {
-        // 从文件读取
-        ifstream file(argv[1]);
-        if (!file.is_open())
-        {
-            cerr << "错误: 无法打开文件 " << argv[1] << "\n";
-            return 1;
-        }
+        filename = argv[1]; // 指定文件优先
+    }
+    else
+    {
+        filename = "D:\\su25-program\\snake\\log.txt"; // 默认文件
+    }
 
+    ifstream file(filename);
+    if (file.is_open())
+    {
         string line;
         vector<LogEntry> entries;
-
-        cout << "=== 解析日志文件: " << argv[1] << " ===\n\n";
-
+        cout << "=== 解析日志文件: " << filename << " ===\n\n";
         while (getline(file, line))
         {
             if (line.empty())
                 continue;
-
             LogEntry entry = parser.parseLogLine(line);
             entries.push_back(entry);
             parser.printFormattedLog(entry);
         }
-
-        parser.analyzeDecisionPattern(entries);
-        parser.generateStatistics(entries);
         file.close();
-    }
-    else
-    {
-        // 从标准输入读取
-        string line;
-        vector<LogEntry> entries;
-
-        cout << "=== 从标准输入读取 (输入空行结束) ===\n\n";
-
-        while (getline(cin, line) && !line.empty())
-        {
-            LogEntry entry = parser.parseLogLine(line);
-            entries.push_back(entry);
-            parser.printFormattedLog(entry);
-        }
-
         if (!entries.empty())
         {
             parser.analyzeDecisionPattern(entries);
             parser.generateStatistics(entries);
         }
+        else
+        {
+            cerr << "(提示) 文件为空或无有效日志条目。\n";
+        }
+        return 0;
     }
-
+    // 回退：文件不存在 => 读 stdin
+    cerr << "(提示) 未找到文件 '" << filename << "'，改为从标准输入读取 (输入空行结束)。\n";
+    string line;
+    vector<LogEntry> entries;
+    while (getline(cin, line) && !line.empty())
+    {
+        LogEntry entry = parser.parseLogLine(line);
+        entries.push_back(entry);
+        parser.printFormattedLog(entry);
+    }
+    if (!entries.empty())
+    {
+        parser.analyzeDecisionPattern(entries);
+        parser.generateStatistics(entries);
+    }
     return 0;
 }

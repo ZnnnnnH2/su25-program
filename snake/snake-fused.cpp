@@ -40,6 +40,7 @@ static constexpr int SAFE_ZONE_BOUNDARY_THRESHOLD = 2;   // 安全区边界危�
 static constexpr int SAFE_ZONE_SHRINK_THRESHOLD = 4;     // 安全区收缩阈值
 static constexpr int ENEMY_BODY_PROXIMITY_THRESHOLD = 2; // 敌蛇身体危险邻近阈值
 static constexpr int TRAP_PROXIMITY_THRESHOLD = 2;       // 陷阱危险邻近阈值
+static constexpr int NEAR_ENEMY_ADJ_PENALTY = 3;         // 邻近敌蛇身体的额外代价
 
 // ==================== 数据结构定义 ====================
 // 与游戏引擎格式对齐的结构体
@@ -255,9 +256,9 @@ static void read_state(State &s)
     }
 
     // ========== 读取安全区域信息 ==========
-    cin >> s.cur.x_min >> s.cur.y_min >> s.cur.x_max >> s.cur.y_max;
-    cin >> s.next_tick >> s.next.x_min >> s.next.y_min >> s.next.x_max >> s.next.y_max;
-    cin >> s.fin_tick >> s.fin.x_min >> s.fin.y_min >> s.fin.x_max >> s.fin.y_max;
+    cin >> s.cur.x_min >> s.cur.x_max >> s.cur.y_min >> s.cur.y_max;
+    cin >> s.next_tick >> s.next.x_min >> s.next.x_max >> s.next.y_min >> s.next.y_max;
+    cin >> s.fin_tick >> s.fin.x_min >> s.fin.x_max >> s.fin.y_min >> s.fin.y_max;
 
     // 可选的内存行被忽略
     // cin >> str_info;
@@ -470,13 +471,6 @@ static GridMask build_masks(const State &s)
     return M;
 }
 
-inline bool can_open_shield()
-{
-    if (global_state.self().shield_cd == 0 && global_state.self().score >= SHIELD_COST_THRESHOLD)
-        return true;
-    return false;
-}
-
 // ==================== 广度优先搜索 (BFS) ====================
 
 /**
@@ -489,6 +483,103 @@ struct BFSOut
     array<array<int, W>, H> snake_cost; // 穿过蛇身的代价 snake_cost[y][x]
     array<array<int, W>, H> parent;     // 父节点方向 parent[y][x]
 };
+
+// 前向声明
+static BFSOut bfs_grid(const GridMask &M, const State &s, int sy, int sx);
+
+inline bool can_open_shield()
+{
+    if (global_state.self().shield_cd == 0 && global_state.self().score >= SHIELD_COST_THRESHOLD)
+        return true;
+    return false;
+}
+
+/**
+ * 检查是否与敌蛇头部发生冲突风险
+ */
+static bool first_step_conflict(const State &s, int sy, int sx, int dir, int opp_next[H][W])
+{
+    int ny = sy + DY[dir], nx = sx + DX[dir];
+    if (!in_bounds(ny, nx))
+        return false;
+    return opp_next[ny][nx] > 0;
+}
+
+/**
+ * 生存策略：在危险情况下寻找最安全的移动方向
+ */
+static int survival_strategy(const State &s, int sy, int sx, stringstream &log_ss)
+{
+    const auto &me = s.self();
+    GridMask M = build_masks(s);
+
+    log_ss << "SURVIVAL_STRATEGY:|";
+
+    // 寻找可达性最好的安全移动方向
+    int bestDir = -1;
+    int bestReach = -1;
+
+    for (int k = 0; k < 4; ++k)
+    {
+        int ny = sy + DY[k], nx = sx + DX[k];
+
+        // 防止180度掉头
+        int opposite_dir = (me.dir + 2) % 4;
+        if (k == opposite_dir)
+            continue;
+
+        if (!in_bounds(ny, nx) || !in_safe_zone(s.cur, ny, nx) || M.blocked(ny, nx))
+            continue;
+        if (M.is_danger(ny, nx) && me.shield_time == 0)
+            continue;
+
+        // 计算可达性得分
+        int reachScore = 0;
+        BFSOut tempG = bfs_grid(M, s, ny, nx);
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                if (tempG.dist[y][x] < (int)1e9)
+                    reachScore++;
+
+        if (reachScore > bestReach)
+        {
+            bestReach = reachScore;
+            bestDir = k;
+        }
+    }
+
+    if (bestDir != -1)
+    {
+        log_ss << "SURVIVAL_MOVE:DIR" << bestDir << "|";
+        return ACT[bestDir];
+    }
+
+    // 如果没有安全方向，尝试开盾
+    if (me.shield_time == 0 && can_open_shield())
+    {
+        log_ss << "SURVIVAL_SHIELD|";
+        return 4;
+    }
+
+    // 绝望移动：尝试任何不会掉头的方向
+    int opposite_dir = (me.dir + 2) % 4;
+    for (int k = 0; k < 4; ++k)
+    {
+        if (k == opposite_dir)
+            continue;
+        int ny = sy + DY[k], nx = sx + DX[k];
+        if (in_bounds(ny, nx) && in_safe_zone(s.cur, ny, nx))
+        {
+            log_ss << "DESPERATE_DIR" << k << "|";
+            return ACT[k];
+        }
+    }
+
+    log_ss << "NO_SURVIVAL_OPTIONS|";
+    return -1; // 无法找到生存选项
+}
+
+// ==================== BFS实现 ====================
 
 /**
  * 在网格上执行BFS，从起始位置(sy, sx)开始
@@ -566,7 +657,22 @@ static BFSOut bfs_grid(const GridMask &M, const State &s, int sy, int sx)
             int extra_cost = 0;
             if (M.is_trap(ny, nx))
             {
-                extra_cost += TRAP_STEP_COST * 2; // 对陷阱格子施加额外代价，使路径规划倾向于避开
+                extra_cost += TRAP_STEP_COST * 2;
+            }
+            // 若该格子四邻有敌方蛇身，则小幅加价，减少被贴身围堵的概率
+            {
+                bool near_enemy = false;
+                for (int ak = 0; ak < 4; ++ak)
+                {
+                    int ay = ny + DY[ak], ax = nx + DX[ak];
+                    if (in_bounds(ay, ax) && M.is_snake(ay, ax))
+                    {
+                        near_enemy = true;
+                        break;
+                    }
+                }
+                if (near_enemy)
+                    extra_cost += NEAR_ENEMY_ADJ_PENALTY;
             }
 
             int new_total_cost = new_dist + new_snake_cost * SNAKE_COST_WEIGHT + extra_cost;
@@ -857,6 +963,26 @@ static Choice decide(const State &s)
     // };
 
     // === 先处理"是否必须立刻开盾"的紧急场景 ===
+
+    // 预计算敌蛇头部可能的下一步位置的权值（用于头撞头风险检测）
+    int opp_next[H][W];
+    memset(opp_next, 0, sizeof(opp_next));
+    for (const auto &sn : s.snakes)
+    {
+        if (sn.id == MYID)
+            continue; // 跳过自己
+        auto head = sn.head();
+        // 预测敌蛇头部四个方向的可能位置
+        for (int k = 0; k < 4; k++)
+        {
+            int ny = head.y + DY[k], nx = head.x + DX[k];
+            if (in_bounds(ny, nx) && in_safe_zone(s.cur, ny, nx))
+            {
+                opp_next[ny][nx] = 1;
+            }
+        }
+    }
+
     // 1) 头部当前已在安全区外：首要任务是回到安全区
     if (!in_bounds(sy, sx) || !in_safe_zone(s.cur, sy, sx))
     {
@@ -982,12 +1108,28 @@ static Choice decide(const State &s)
                     // 基本的边界和安全区检查
                     if (in_bounds(ny, nx) && in_safe_zone(s.cur, ny, nx))
                     {
+                        // 如果首步是头撞头高风险且不开盾，则走生存策略
+                        if (first_step_conflict(s, sy, sx, k, opp_next) && s.self().shield_time == 0 && !can_open_shield())
+                        {
+                            int surv = survival_strategy(s, sy, sx, log_ss);
+                            str_info += log_ss.str();
+                            return {surv};
+                        }
                         str_info += log_ss.str();
                         return {ACT[k]};
                     }
                 }
 
-                // 如果连基本移动都不可能，尝试找一个不会掉头的方向
+                // 如果连基本移动都不可能，先尝试生存策略兜底
+                {
+                    int surv = survival_strategy(s, sy, sx, log_ss);
+                    if (surv != -1)
+                    {
+                        str_info += log_ss.str();
+                        return {surv};
+                    }
+                }
+                // 然后再尝试找一个不会掉头的方向
                 log_ss << "ULTIMATE_FALLBACK:FIND_NON_REVERSE|";
 
                 // 计算掉头方向
@@ -1025,25 +1167,6 @@ static Choice decide(const State &s)
                 log_ss << "ULTIMATE_FALLBACK:FORCED_LEFT|";
                 str_info += log_ss.str();
                 return {0};
-            }
-        }
-    }
-
-    // 2) 预计算敌蛇头部可能的下一步位置的权值（用于头撞头风险检测）
-    int opp_next[H][W];
-    memset(opp_next, 0, sizeof(opp_next));
-    for (const auto &sn : s.snakes)
-    {
-        if (sn.id == MYID)
-            continue; // 跳过自己
-        auto head = sn.head();
-        // 预测敌蛇头部四个方向的可能位置
-        for (int k = 0; k < 4; k++)
-        {
-            int ny = head.y + DY[k], nx = head.x + DX[k];
-            if (in_bounds(ny, nx) && in_safe_zone(s.cur, ny, nx))
-            {
-                opp_next[ny][nx] = true;
             }
         }
     }

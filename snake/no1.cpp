@@ -15,6 +15,7 @@ static constexpr int SNAKE_COST_WITH_SHIELD = 0; // 有护盾时穿过蛇身的�
 static constexpr int SNAKE_COST_OPEN_SHIELD = 2; // 使用护盾来穿过蛇身的额外代价
 static constexpr int SHIELD_COST_THRESHOLD = 20; // 使用护盾所需的最低分数门槛
 static constexpr int TRAP_STEP_COST = 30;        // 陷阱步骤惩罚代价，用于路径规划中软性避开陷阱
+static constexpr int NEAR_SNAKE_ADJ_PENALTY = 5; // 紧邻蛇身（未进入蛇身）格子的附加惩罚（避免一路贴着蛇尾/蛇身行走）
 
 // ==================== 食物和物品价值常量 ====================
 // 定义游戏中各种物品的价值，用于目标选择的决策算法
@@ -425,11 +426,13 @@ static void build_map(const State &s)
  */
 inline bool unsafe_to_go(int y, int x, bool has_key = false)
 {
+
     if (!in_bounds(y, x) || mp[y][x] == 0) // 边界外或安全区外
         return true;
 
     int val = mp[y][x];
-
+    if (mp[y][x] == 999999) // 空白安全区
+        return false;
     // 其他蛇的身体（自己的蛇身除外，学号都大于1000）
     if (val > 1000 && val != MYID)
         return true;
@@ -453,8 +456,9 @@ inline bool go_but_need_shield(int y, int x)
     {
         return true;
     }
-
     int val = mp[y][x];
+    if (val == 999999)
+        return false;
     return val > 1000 && val != MYID; // 学号都大于1000，用于标识蛇身
 }
 
@@ -572,6 +576,15 @@ inline bool can_open_shield()
     return false;
 }
 
+/**
+ * 检测是否是敌人
+ */
+inline bool is_enemy(int y, int x)
+{
+    if (mp[y][x] == 999999)
+        return false;
+    return mp[y][x] > 1000 && mp[y][x] != MYID;
+}
 // ==================== 广度优先搜索 (BFS) ====================
 
 /**
@@ -677,6 +690,25 @@ static BFSOut bfs_grid(const State &s, int sy, int sx)
             if (is_trap(ny, nx))
             {
                 extra_cost += TRAP_STEP_COST * 2; // 陷阱额外惩罚
+            }
+
+            // === 蛇身邻近惩罚 (不包含本身为蛇身的格子，蛇身格子已在上方代价中处理) ===
+            if (!(mp[ny][nx] > 1000))
+            {
+                int adj_body_cnt = 0;
+                for (int t = 0; t < 4; ++t)
+                {
+                    int ay = ny + DY[t], ax = nx + DX[t];
+                    if (!in_bounds(ay, ax))
+                        continue;
+                    if (is_enemy(ay, ax))
+                        ++adj_body_cnt; // 相邻为任意蛇身体
+                }
+                if (adj_body_cnt > 0)
+                {
+                    // 紧邻蛇身格子增加附加代价， discouraging 跟随蛇尾形成狭窄通道
+                    extra_cost += adj_body_cnt * NEAR_SNAKE_ADJ_PENALTY;
+                }
             }
 
             // 计算总代价：距离 + 蛇身代价*权重 + 陷阱惩罚
@@ -900,7 +932,8 @@ static int survival_strategy(const State &s, int sy, int sx, stringstream &log_s
         return ACT[bestDir];
     }
     // 尝试经过陷阱（但仍避免蛇身和其他障碍）
-    log_ss << "TRAP_DESPERATE_MOVE_ANALYSIS:|";
+    // 绝望移动分析：原 token 为 TRAP_DESPERATE_MOVE_ANALYSIS 与解析器不匹配，这里统一为 DESPERATE_MOVE_ANALYSIS
+    log_ss << "DESPERATE_MOVE_ANALYSIS:|";
     for (int k = 0; k < 4; ++k)
     {
         int ny = sy + DY[k], nx = sx + DX[k];
@@ -937,12 +970,11 @@ static int survival_strategy(const State &s, int sy, int sx, stringstream &log_s
             (!go_but_need_shield(ny, nx) || me.shield_time > 0))
         {
             // 即使是陷阱也允许通过，作为最后的求生手段
+            // 标记选择该方向，并输出标准化的 NORMAL_MOVE 供日志解析器识别
             log_ss << ":TRAP_DESPERATE_CHOSEN";
             if (is_trap(ny, nx))
-            {
                 log_ss << "(TRAP_ACCEPTED)";
-            }
-            log_ss << "|";
+            log_ss << "|NORMAL_MOVE:" << direction_name << ",a:" << ACT[k] << "|";
             return ACT[k];
         }
         else
@@ -961,8 +993,29 @@ static int survival_strategy(const State &s, int sy, int sx, stringstream &log_s
     // === 策略4：绝望的护盾尝试 ===
     // 如果连基本移动都不可能，强制尝试开启护盾（即使在冷却中）
     log_ss << "FORCED_SHIELD:|";
-    // 原实现返回 1(上) 与日志含义(护盾) 不一致，修正为返回护盾动作 4
-    return 4;
+    // 如果能开启护盾就开启，否则选择一个不会掉头的方向移动
+    if (can_open_shield())
+    {
+        return 4; // 动作4 = 开启护盾
+    }
+    else
+    {
+        // 计算掉头方向，选择一个不会掉头的方向
+        int opposite_dir = (global_state.self().dir + 2) % 4;
+
+        for (int fallback_k = 0; fallback_k < 4; fallback_k++)
+        {
+            if (fallback_k != opposite_dir)
+            {
+                log_ss << "NO_FORCED_SHIELD_AVAILABLE:FALLBACK_DIR" << fallback_k << "|";
+                return ACT[fallback_k];
+            }
+        }
+
+        // 理论上不应该到这里，但作为最后的兜底
+        log_ss << "ULTIMATE_FORCED_FALLBACK:LEFT|";
+        return 0;
+    }
 }
 
 // ==================== 决策算法 ====================
@@ -1133,8 +1186,42 @@ static Choice decide(const State &s)
                     }
                 }
 
-                // 如果连基本移动都不可能，只能默认向左移动
-                log_ss << "ULTIMATE_FALLBACK:LEFT|";
+                // 如果连基本移动都不可能，尝试找一个不会掉头的方向
+                log_ss << "ULTIMATE_FALLBACK:FIND_NON_REVERSE|";
+
+                // 计算掉头方向
+                int opposite_dir = (me.dir + 2) % 4;
+
+                // 尝试四个方向，找到第一个不会掉头的方向
+                for (int fallback_k = 0; fallback_k < 4; fallback_k++)
+                {
+                    if (fallback_k != opposite_dir) // 不是掉头方向
+                    {
+                        string fallback_direction;
+                        switch (fallback_k)
+                        {
+                        case 0:
+                            fallback_direction = "LEFT";
+                            break;
+                        case 1:
+                            fallback_direction = "UP";
+                            break;
+                        case 2:
+                            fallback_direction = "RIGHT";
+                            break;
+                        case 3:
+                            fallback_direction = "DOWN";
+                            break;
+                        }
+
+                        log_ss << "ULTIMATE_FALLBACK:" << fallback_direction << "|";
+                        str_info += log_ss.str();
+                        return {ACT[fallback_k]};
+                    }
+                }
+
+                // 如果所有方向都是掉头（理论上不可能），只能硬选一个
+                log_ss << "ULTIMATE_FALLBACK:FORCED_LEFT|";
                 str_info += log_ss.str();
                 return {0};
             }
@@ -1196,7 +1283,7 @@ static Choice decide(const State &s)
         for (int i = 0; i < 4; i++)
         {
             int yy = it.pos.y + DY[i], xx = it.pos.x + DX[i];
-            if (!in_bounds(yy, xx) || !in_safe_zone(s.cur, yy, xx) || !unsafe_to_go(yy, xx, me.has_key))
+            if (!in_bounds(yy, xx) || in_safe_zone(s.cur, yy, xx) || !unsafe_to_go(yy, xx, me.has_key))
                 mun++;
         }
         if (mun >= 3)
@@ -1468,6 +1555,8 @@ static Choice decide(const State &s)
         return {ACT[dir]}; // 返回对应的移动动作
     }
     int final_choice = survival_strategy(s, sy, sx, log_ss);
+    // 补充：之前遗漏了将兜底策略日志写入全局日志
+    str_info += log_ss.str();
     return {final_choice};
 }
 
@@ -1489,6 +1578,7 @@ static Choice decide(const State &s)
  */
 int main()
 {
+    freopen("D:\\su25-program\\snake\\input.in", "r", stdin);
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
 
