@@ -15,11 +15,11 @@ static constexpr int SHIELD_COST_THRESHOLD = 20; // 使用护盾所需的最低�
 static constexpr int TRAP_STEP_COST = 30;        // 陷阱步骤惩罚代价，用于路径规划中软性避开陷阱
 
 // ==================== 食物和物品价值常量 ====================
-static constexpr int GROWTH_FOOD_VALUE = 10;     // 成长食物价值
+static constexpr int GROWTH_FOOD_VALUE = 8;      // 成长食物价值
 static constexpr int TRAP_PENALTY = -10;         // 陷阱扣分（负值）
 static constexpr int KEY_VALUE = 50;             // 钥匙价值
 static constexpr int CHEST_VALUE = 100;          // 宝箱基础价值
-static constexpr int NORMAL_FOOD_MULTIPLIER = 3; // 普通食物价值倍数（type * 4）
+static constexpr int NORMAL_FOOD_MULTIPLIER = 4; // 普通食物价值倍数
 
 // ==================== 评分和权重常量 ====================
 static constexpr double SNAKE_SAFETY_PENALTY_RATE = 0.5; // 蛇身穿越安全惩罚率（每个蛇身格子的惩罚倍数）
@@ -27,9 +27,17 @@ static constexpr double CHEST_SCORE_MULTIPLIER = 2.0;    // 宝箱评分倍数
 static constexpr double DEFAULT_CHEST_SCORE = 60.0;      // 默认宝箱分数（当宝箱分数<=0时使用）
 static constexpr double DISTANCE_OFFSET = 1.0;           // 距离计算偏移量，避免除零
 static constexpr int SCORE_DISPLAY_MULTIPLIER = 100;     // 分数显示时的放大倍数（用于日志输出）
+static constexpr double LIFETIME_SOFT_DECAY = 0.85;      // 寿命衰减底数（每多1步到达，乘以此因子）
+static constexpr double CONTEST_PENALTY = 0.4;           // 竞争目标惩罚系数（被对手同样或更快到达的目标评分乘以此值）
+static constexpr double NEXTZONE_RISK_PENALTY = 0.35;    // 缩圈前无法抵达且目标不在下个安全区时的折扣
+static constexpr double DEGREE_BONUS = 0.06;             // 局部自由度奖励系数（每个安全邻居给予的乘数奖励）
+
+// ==================== 前瞻算法常量 ====================
+static constexpr int LOOKAHEAD_DEPTH = 1; // 1=启用一步前瞻；0=关闭
 
 // ==================== 风险评估常量 ====================
 static constexpr int SAFE_ZONE_BOUNDARY_THRESHOLD = 2;   // 安全区边界危险邻近阈值
+static constexpr int SAFE_ZONE_SHRINK_THRESHOLD = 4;     // 安全区收缩阈值
 static constexpr int ENEMY_BODY_PROXIMITY_THRESHOLD = 2; // 敌蛇身体危险邻近阈值
 static constexpr int TRAP_PROXIMITY_THRESHOLD = 2;       // 陷阱危险邻近阈值
 
@@ -99,13 +107,15 @@ struct Safe
 {
     int x_min, y_min, x_max, y_max; // 安全区域的边界坐标
 };
+
+
 /**
  * 游戏状态结构
  * 包含完整的游戏状态信息
  */
 struct State
 {
-    int current_ticks;
+    int current_ticks;                 // 当前回合数
     int remaining_ticks;               // 游戏剩余回合数
     vector<Item> items;                // 地图上的所有物品
     vector<Snake> snakes;              // 游戏中的所有蛇
@@ -242,16 +252,37 @@ inline bool in_safe_zone(const Safe &z, int y, int x)
 }
 
 /**
- * 检查坐标是否在安全区域内（同时检查地图边界）
- * 为了向后兼容保留此函数，但建议使用分离的边界和安全区域检查
+ * 若坐标在当前安全区 z 内：
+ *   1) 如果下次收缩不存在 (next_tick == -1) 或 距离收缩还有 >5 回合，返回 0
+ *   2) 否则返回该点到“收缩后安全区”(global_state.next) 的曼哈顿距离（若点已在下一安全区内则为0）
+ * 若坐标不在当前安全区内，返回 -1
  */
-inline bool in_safe(const Safe &z, int y, int x)
+inline int danger_safe_zone(const Safe &z, int y, int x)
 {
-    // 首先检查地图边界
-    if (!in_bounds(y, x))
-        return false;
-    // 然后检查安全区域
-    return in_safe_zone(z, y, x);
+    // 不在当前安全区
+    if (!(x >= z.x_min && x <= z.x_max && y >= z.y_min && y <= z.y_max))
+        return -1;
+
+    // 下次收缩信息
+    const int next_tick = global_state.next_tick;
+    const int now_tick = global_state.current_ticks;
+
+    // 不会在 5 回合内收缩
+    if (next_tick == -1 || (next_tick - now_tick) > 5)
+        return 0;
+
+    // 计算到收缩后安全区的曼哈顿“外距”（在内部为0）
+    const Safe &nz = global_state.next;
+    int dx = 0, dy = 0;
+    if (x < nz.x_min)
+        dx = nz.x_min - x;
+    else if (x > nz.x_max)
+        dx = x - nz.x_max;
+    if (y < nz.y_min)
+        dy = nz.y_min - y;
+    else if (y > nz.y_max)
+        dy = y - nz.y_max;
+    return dx + dy;
 }
 
 // 游戏引擎动作映射 (按规范): 0=左,1=上,2=右,3=下,4=护盾
@@ -352,16 +383,6 @@ struct GridMask
 static GridMask build_masks(const State &s)
 {
     GridMask M;
-
-    // 1) 安全区域外 = 阻挡
-    for (int y = 0; y < H; y++)
-    {
-        for (int x = 0; x < W; x++)
-        {
-            if (!in_bounds(y, x) || !in_safe_zone(s.cur, y, x))
-                M.block(y, x);
-        }
-    }
 
     // 2) 所有蛇的身体 = 阻挡
     for (const auto &sn : s.snakes)
@@ -485,15 +506,15 @@ static BFSOut bfs_grid(const GridMask &M, const State &s, int sy, int sx)
         {
             int ny = y + DY[k], nx = x + DX[k];
 
-            // 检查边界和阻挡
-            if (!in_bounds(ny, nx) || !in_safe_zone(s.cur, ny, nx) || M.blocked(ny, nx))
+            // 检查边界和阻挡 必死检查
+            if (!(in_bounds(ny, nx)) || M.blocked(ny, nx))
                 continue;
 
             int new_dist = out.dist[y][x] + 1;
             int new_snake_cost = out.snake_cost[y][x];
 
-            // 如果是蛇身格子，增加蛇身代价
-            if (M.is_snake(ny, nx))
+            // 如果是蛇身格子/安全区外，增加蛇身代价 （有代价的步骤）
+            if (M.is_snake(ny, nx) || !in_safe_zone(s.cur, ny, nx))
             {
                 // 只有"已经在护盾状态中"才把穿过蛇身当作低成本；
                 // 不能因为"可以开启护盾"而立刻低成本，因为开启护盾会消耗一个回合（原地不动）。
@@ -501,9 +522,14 @@ static BFSOut bfs_grid(const GridMask &M, const State &s, int sy, int sx)
                 {
                     new_snake_cost += SNAKE_COST_WITH_SHIELD; // 有护盾时的低代价
                 }
-                else
+                else if (can_open_shield()) // 没有护盾但可开护盾
                 {
                     new_snake_cost += SNAKE_COST_NO_SHIELD; // 当前无护盾：穿过蛇身代价极高（尽量避免）
+                    new_dist += 1;                          // 开启护盾需要消耗一个回合
+                }
+                else
+                {                            // 没有也不可开
+                    new_snake_cost += 10000; // 当前无护盾：穿过蛇身代价极急急急高（尽量避免）
                 }
             }
 
@@ -511,7 +537,7 @@ static BFSOut bfs_grid(const GridMask &M, const State &s, int sy, int sx)
             int extra_cost = 0;
             if (M.is_trap(ny, nx))
             {
-                extra_cost += TRAP_STEP_COST; // 对陷阱格子施加额外代价，使路径规划倾向于避开
+                extra_cost += TRAP_STEP_COST * 2; // 对陷阱格子施加额外代价，使路径规划倾向于避开
             }
 
             int new_total_cost = new_dist + new_snake_cost * SNAKE_COST_WEIGHT + extra_cost;
@@ -564,6 +590,24 @@ static Choice decide(const State &s)
            << "SHIELD_COOLDOWN:" << me.shield_cd << "|"
            << "SHIELD_TIME:" << me.shield_time << "|";
 
+    // 敌人到任意点的粗略距离（曼哈顿距离近似）
+    auto min_opp_dist = [&](int y, int x) -> int
+    {
+        int best = 1000000000;
+        for (const auto &sn : s.snakes)
+        {
+            if (sn.id == MYID)
+                continue;
+            const auto &h = sn.head();
+            if (h.y < 0 || h.y >= H || h.x < 0 || h.x >= W)
+                continue;
+            int md = std::abs(y - h.y) + std::abs(x - h.x);
+            if (md < best)
+                best = md;
+        }
+        return best;
+    };
+
     // === 先处理"是否必须立刻开盾"的紧急场景 ===
     // 1) 头部当前已在安全区外：首要任务是回到安全区
     if (!in_bounds(sy, sx) || !in_safe_zone(s.cur, sy, sx))
@@ -578,7 +622,7 @@ static Choice decide(const State &s)
             return {4};
         }
 
-        // 如果有护盾或无法开盾，寻找最近的安全区入口
+        // 如果有护盾，寻找最近的安全区入口，忽略敌人蛇身
         log_ss << "SEEKING_SAFE_ZONE_ENTRY|";
 
         // 计算到安全区边界的最短路径
@@ -596,36 +640,6 @@ static Choice decide(const State &s)
 
             // 检查是否有障碍物（除了安全区边界外的其他障碍）
             bool blocked = false;
-
-            // 检查是否有其他蛇身体（除自己外）
-            for (const auto &sn : s.snakes)
-            {
-                if (sn.id == MYID)
-                    continue;
-                for (const auto &body_part : sn.body)
-                {
-                    if (body_part.y == ny && body_part.x == nx)
-                    {
-                        blocked = true;
-                        break;
-                    }
-                }
-                if (blocked)
-                    break;
-            }
-
-            // 检查宝箱障碍（如果没有钥匙）
-            if (!me.has_key)
-            {
-                for (const auto &chest : s.chests)
-                {
-                    if (chest.pos.y == ny && chest.pos.x == nx)
-                    {
-                        blocked = true;
-                        break;
-                    }
-                }
-            }
 
             if (blocked)
             {
@@ -733,9 +747,9 @@ static Choice decide(const State &s)
         }
     }
 
-    // 2) 预计算敌蛇头部可能的下一步位置（用于头撞头风险检测）
-    bool opp_next[H][W];
-    memset(opp_next, false, sizeof(opp_next));
+    // 2) 预计算敌蛇头部可能的下一步位置的权值（用于头撞头风险检测）
+    int opp_next[H][W];
+    memset(opp_next, 0, sizeof(opp_next));
     for (const auto &sn : s.snakes)
     {
         if (sn.id == MYID)
@@ -767,6 +781,26 @@ static Choice decide(const State &s)
         return make_tuple(true, d, snake_steps);
     };
 
+    // 目标落点的局部自由度：四邻中可继续行走的数量（越大越不易被困）
+    auto local_degree = [&](int y, int x) -> int
+    {
+        int deg = 0;
+        for (int t = 0; t < 4; ++t)
+        {
+            int py = y + DY[t], px = x + DX[t];
+            if (py < 0 || py >= H || px < 0 || px >= W)
+                continue;
+            if (!in_safe_zone(s.cur, py, px))
+                continue;
+            if (M.blocked(py, px))
+                continue;
+            if (M.is_snake(py, px))
+                continue;
+            ++deg;
+        }
+        return deg;
+    };
+
     struct Target
     {
         int y, x;
@@ -787,7 +821,7 @@ static Choice decide(const State &s)
             continue;
         if (it.type == -2)
             continue;
-        if (it.type == -5 && !me.has_key)
+        if (it.type == -5)
             continue;
         if (it.type == -3 && me.has_key)
             continue;
@@ -796,7 +830,21 @@ static Choice decide(const State &s)
 
         // 安全性惩罚：穿过蛇身的路径降低评分
         double safety_penalty = DISTANCE_OFFSET + snake_steps * SNAKE_SAFETY_PENALTY_RATE; // 每个蛇身格子降低指定比例的效率
-        double sc = v / ((d + DISTANCE_OFFSET) * safety_penalty);
+
+        // 竞争检测：如果敌人能同样快或更快到达，降低此目标的吸引力
+        int d_opp = min_opp_dist(it.pos.y, it.pos.x);
+        double contest_factor = (d_opp <= d ? CONTEST_PENALTY : 1.0);
+
+        // 下一安全区风险检测：如果到达时已经缩圈且目标不在下一安全区内，降低吸引力
+        double zone_factor = 1.0;
+        if (s.next_tick != -1 && (s.current_ticks + d) >= s.next_tick)
+        {
+            if (!in_safe_zone(s.next, it.pos.y, it.pos.x))
+                zone_factor = NEXTZONE_RISK_PENALTY;
+        }
+
+        double degree_factor = 1.0 + DEGREE_BONUS * local_degree(it.pos.y, it.pos.x);
+        double sc = (v * (it.lifetime == -1 ? 1.0 : pow(LIFETIME_SOFT_DECAY, d))) / ((d + DISTANCE_OFFSET) * safety_penalty) * contest_factor * zone_factor * degree_factor;
         cand.push_back({it.pos.y, it.pos.x, sc, d, snake_steps});
 
         // 详细日志：记录候选目标
@@ -830,7 +878,21 @@ static Choice decide(const State &s)
             if (!ok)
                 continue;
             double safety_penalty = DISTANCE_OFFSET + snake_steps * SNAKE_SAFETY_PENALTY_RATE;
-            double sc = (c.score > 0 ? c.score * CHEST_SCORE_MULTIPLIER : DEFAULT_CHEST_SCORE) / ((d + DISTANCE_OFFSET) * safety_penalty);
+
+            // 竞争检测：如果敌人能同样快或更快到达，降低此目标的吸引力
+            int d_opp = min_opp_dist(c.pos.y, c.pos.x);
+            double contest_factor = (d_opp <= d ? CONTEST_PENALTY : 1.0);
+
+            // 下一安全区风险检测：如果到达时已经缩圈且目标不在下一安全区内，降低吸引力
+            double zone_factor = 1.0;
+            if (s.next_tick != -1 && (s.current_ticks + d) >= s.next_tick)
+            {
+                if (!in_safe_zone(s.next, c.pos.y, c.pos.x))
+                    zone_factor = NEXTZONE_RISK_PENALTY;
+            }
+
+            double degree_factor = 1.0 + DEGREE_BONUS * local_degree(c.pos.y, c.pos.x);
+            double sc = (c.score > 0 ? c.score * CHEST_SCORE_MULTIPLIER : DEFAULT_CHEST_SCORE) / ((d + DISTANCE_OFFSET) * safety_penalty) * contest_factor * zone_factor * degree_factor;
             cand.push_back({c.pos.y, c.pos.x, sc, d, snake_steps});
 
             log_ss << "CHEST@(" << c.pos.y << "," << c.pos.x
@@ -1010,10 +1072,64 @@ static Choice decide(const State &s)
             }
 
             // 只检查基本的边界和阻挡；若已有护盾可穿蛇身
-            if (in_bounds(ny, nx) && in_safe_zone(s.cur, ny, nx) && !M.blocked(ny, nx) &&
+            if (in_bounds(ny, nx) && !M.blocked(ny, nx) &&
                 (!M.is_snake(ny, nx) || me.shield_time > 0))
             {
                 log_ss << ":DESPERATE_MOVE_CHOSEN|";
+                str_info += log_ss.str();
+                return ACT[k];
+            }
+            else
+            {
+                log_ss << ":NOT_VIABLE|";
+            }
+        }
+
+        // === 策略3.5：允许经过陷阱的绝望移动 ===
+        // 如果连基本移动都不可能，尝试经过陷阱（但仍避免蛇身和其他障碍）
+        log_ss << "TRAP_DESPERATE_MOVE_ANALYSIS:|";
+        for (int k = 0; k < 4; ++k)
+        {
+            int ny = sy + DY[k], nx = sx + DX[k];
+
+            string direction_name;
+            switch (k)
+            {
+            case 0:
+                direction_name = "LEFT";
+                break;
+            case 1:
+                direction_name = "UP";
+                break;
+            case 2:
+                direction_name = "RIGHT";
+                break;
+            case 3:
+                direction_name = "DOWN";
+                break;
+            }
+
+            log_ss << direction_name << "@(" << ny << "," << nx << ")";
+
+            // === 防止180度掉头检查 ===
+            int opposite_dir = (me.dir + 2) % 4;
+            if (k == opposite_dir)
+            {
+                log_ss << ":REVERSE_BLOCKED|";
+                continue;
+            }
+
+            // 检查基本边界、阻挡和蛇身，但允许陷阱通过
+            if (in_bounds(ny, nx) && in_safe_zone(s.cur, ny, nx) && !M.blocked(ny, nx) &&
+                (!M.is_snake(ny, nx) || me.shield_time > 0) && !M.is_danger(ny, nx))
+            {
+                // 即使是陷阱也允许通过，作为最后的求生手段
+                log_ss << ":TRAP_DESPERATE_CHOSEN";
+                if (M.is_trap(ny, nx))
+                {
+                    log_ss << "(TRAP_ACCEPTED)";
+                }
+                log_ss << "|";
                 str_info += log_ss.str();
                 return ACT[k];
             }
@@ -1027,7 +1143,7 @@ static Choice decide(const State &s)
         // 如果连基本移动都不可能，强制尝试开启护盾（即使在冷却中）
         log_ss << "FORCED_SHIELD:|";
         str_info += log_ss.str();
-        return 4;
+        return 2;
     };
 
     // 5) 如果没有任何候选目标：执行“求生优先”兜底策略
@@ -1047,6 +1163,138 @@ static Choice decide(const State &s)
     log_ss << "TARGET_SELECTED:(" << target.y << "," << target.x
            << ")sc:" << (int)(target.score * SCORE_DISPLAY_MULTIPLIER) << ",d:" << target.dist
            << ",s:" << target.snake_cost << "|";
+
+    // === 一步前瞻：尝试4个可能的首步，估计下一步后最优可食目标评分 ===
+    int l1_best_dir = -1;
+    double l1_best_eval = -1e100;
+    if (LOOKAHEAD_DEPTH == 1)
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            int ny = sy + DY[k], nx = sx + DX[k];
+
+            // 基本边界检查
+            if (!in_bounds(ny, nx) || !in_safe_zone(s.cur, ny, nx))
+                continue;
+            if (M.blocked(ny, nx))
+                continue;
+
+            // 无护盾时避开危险格子和蛇身
+            if (me.shield_time == 0)
+            {
+                if (M.is_danger(ny, nx) || M.is_snake(ny, nx))
+                    continue;
+            }
+
+            // 从这个候选位置执行BFS
+            BFSOut G2 = bfs_grid(M, s, ny, nx);
+
+            double best_here = -1e100;
+
+            // 评估所有物品
+            for (const auto &it : s.items)
+            {
+                if (it.type == -2)
+                    continue; // 跳过陷阱
+                if (it.type == -5 && !me.has_key)
+                    continue; // 无钥匙时跳过宝箱
+                if (it.type == -3 && me.has_key)
+                    continue; // 有钥匙时跳过钥匙
+
+                auto [ok2, d2, snake_steps2] = [&]()
+                {
+                    if (!in_bounds(it.pos.y, it.pos.x) || !in_safe_zone(s.cur, it.pos.y, it.pos.x))
+                    {
+                        return make_tuple(false, (int)1e9, (int)1e9);
+                    }
+                    int dist = G2.dist[it.pos.y][it.pos.x];
+                    int snake_cost = G2.snake_cost[it.pos.y][it.pos.x];
+                    if (dist >= (int)1e9)
+                        return make_tuple(false, dist, snake_cost);
+                    if (it.lifetime != -1 && (dist + 1) > it.lifetime)
+                        return make_tuple(false, dist, snake_cost);
+                    return make_tuple(true, dist, snake_cost);
+                }();
+
+                if (!ok2)
+                    continue;
+
+                double v2 = it.value;
+                double safety_penalty2 = DISTANCE_OFFSET + snake_steps2 * SNAKE_SAFETY_PENALTY_RATE;
+
+                int d_opp2 = min_opp_dist(it.pos.y, it.pos.x);
+                double contest_factor2 = (d_opp2 <= (d2 + 1) ? CONTEST_PENALTY : 1.0);
+
+                double zone_factor2 = 1.0;
+                if (s.next_tick != -1 && (s.current_ticks + d2 + 1) >= s.next_tick)
+                {
+                    if (!in_safe_zone(s.next, it.pos.y, it.pos.x))
+                    {
+                        zone_factor2 = NEXTZONE_RISK_PENALTY;
+                    }
+                }
+
+                double degree_factor2 = 1.0 + DEGREE_BONUS * local_degree(it.pos.y, it.pos.x);
+                double sc2 = (v2 / ((d2 + 1.0) * safety_penalty2)) * contest_factor2 * zone_factor2 * degree_factor2;
+
+                if (sc2 > best_here)
+                    best_here = sc2;
+            }
+
+            // 如果有钥匙，评估宝箱
+            if (me.has_key)
+            {
+                for (const auto &c : s.chests)
+                {
+                    auto [ok2, d2, snake_steps2] = [&]()
+                    {
+                        if (!in_bounds(c.pos.y, c.pos.x) || !in_safe_zone(s.cur, c.pos.y, c.pos.x))
+                        {
+                            return make_tuple(false, (int)1e9, (int)1e9);
+                        }
+                        int dist = G2.dist[c.pos.y][c.pos.x];
+                        int snake_cost = G2.snake_cost[c.pos.y][c.pos.x];
+                        if (dist >= (int)1e9)
+                            return make_tuple(false, dist, snake_cost);
+                        return make_tuple(true, dist, snake_cost);
+                    }();
+
+                    if (!ok2)
+                        continue;
+
+                    double safety_penalty2 = DISTANCE_OFFSET + snake_steps2 * SNAKE_SAFETY_PENALTY_RATE;
+                    int d_opp2 = min_opp_dist(c.pos.y, c.pos.x);
+                    double contest_factor2 = (d_opp2 <= (d2 + 1) ? CONTEST_PENALTY : 1.0);
+
+                    double zone_factor2 = 1.0;
+                    if (s.next_tick != -1 && (s.current_ticks + d2 + 1) >= s.next_tick)
+                    {
+                        if (!in_safe_zone(s.next, c.pos.y, c.pos.x))
+                        {
+                            zone_factor2 = NEXTZONE_RISK_PENALTY;
+                        }
+                    }
+
+                    double degree_factor2 = 1.0 + DEGREE_BONUS * local_degree(c.pos.y, c.pos.x);
+                    double chest_score = (c.score > 0 ? c.score * CHEST_SCORE_MULTIPLIER : DEFAULT_CHEST_SCORE);
+                    double sc2 = (chest_score / ((d2 + 1.0) * safety_penalty2)) * contest_factor2 * zone_factor2 * degree_factor2;
+
+                    if (sc2 > best_here)
+                        best_here = sc2;
+                }
+            }
+
+            if (best_here > l1_best_eval)
+            {
+                l1_best_eval = best_here;
+                l1_best_dir = k;
+            }
+        }
+        if (l1_best_dir != -1)
+        {
+            log_ss << "L1_LOOKAHEAD_PREF:" << l1_best_dir << "|";
+        }
+    }
 
     // 7) 从目标位置回溯到蛇头，找到第一步应该走的方向
     int ty = target.y, tx = target.x; // 目标位置坐标
@@ -1101,6 +1349,22 @@ static Choice decide(const State &s)
         // 错误处理：优先开启护盾，否则默认向左移动
         int choice = last_choice();
         return {choice};
+    }
+
+    // 若前瞻计算出更优的第一步，则覆盖当前dir与下一步坐标
+    if (l1_best_dir != -1 && l1_best_dir != dir)
+    {
+        int pny = sy + DY[l1_best_dir], pnx = sx + DX[l1_best_dir];
+        if (pny >= 0 && pny < H && pnx >= 0 && pnx < W && in_safe_zone(s.cur, pny, pnx) && !M.blocked(pny, pnx))
+        {
+            if (me.shield_time > 0 || (!M.is_danger(pny, pnx) && !M.is_snake(pny, pnx)))
+            {
+                dir = l1_best_dir;
+                cy = pny;
+                cx = pnx;
+                log_ss << "L1_LOOKAHEAD_OVERRIDE:" << dir << "|";
+            }
+        }
     }
 
     // === 主动护盾策略：头撞头风险和安全区检测 ===
