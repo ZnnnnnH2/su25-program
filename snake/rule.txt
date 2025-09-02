@@ -1,80 +1,80 @@
-一、游戏概述
-本平台是一个多人在线对战的贪吃蛇游戏。玩家需编写算法程序，通过接口控制蛇的移动与行为，与其他玩家的程序进行博弈。游戏的核心目标是在有限的回合内，通过获取食物来最大化得分，同时规避各类风险。游戏结束时，得分最高的玩家获胜。
+1. Game overview
+This platform is a multiplayer online battle snake game. Players need to write algorithm programs to control the snake's movement and behavior through interfaces and play games with other players' programs. The core goal of the game is to maximize your score by obtaining food in a limited number of rounds while avoiding various risks. At the end of the game, the player with the highest score wins.
 
-二、游戏地图
-地图尺寸：40 × 30 格 (宽 × 高)
-坐标系统：以左上角的格子为(0, 0)，x轴向右递增，y轴向下递增。
-三、游戏实体
-1. 蛇
-初始长度：5格
-移动方式：每个游戏刻 (tick) 移动一格。蛇由头部和身体组成，身体会跟随头部已走过的路径移动。
-2. 场上物品
-普通食物：提供1-5分，不同分值的食物颜色不同。
-增长豆：使蛇的长度增加两格，不提供分数，其值为-1。
-陷阱：吃到后扣除 10 分，其值为-2。
-四、游戏机制
-1. 蛇的成长
-分数增长：蛇的得分每累计达到20的倍数，长度会自动增加一格。
-直接增长：吃到增长豆会使长度立即增加两格。
-2. 护盾系统
-蛇在出生时自带一个持续10个游戏刻的初始护盾。
-玩家可以消耗20分主动激活护盾。激活护盾是一个决策动作，该游戏刻蛇将停留在原地。
-护盾激活后持续5个游戏刻，在此期间蛇免疫因碰撞导致的死亡（墙壁除外）。
-主动激活的护盾有30个游戏刻的冷却时间。
-3. 碰撞规则
-与障碍物碰撞：蛇立即死亡。此规则优先级最高，护盾无效
-与自己的身体碰撞：无影响，不会死亡
-与其他蛇身体碰撞：
-持有护盾：免疫碰撞，可安全穿过对方蛇的身体
-未持有护盾：碰撞方立即死亡
-蛇头与蛇头碰撞：
-双方均有护盾：双方均不受伤害
-仅一方有护盾：未持有护盾的一方死亡
-双方均无护盾：双方同时死亡
-4. 食物生成
-游戏开始时会生成一批初始食物，之后每3个游戏刻会周期性生成新食物。
-生命周期：场上物品若长时间未被拾取将会消失。
-普通食物：60个游戏刻
-增长豆/陷阱：80个游戏刻
-数量限制：场上同时存在的食物总数上限与当前存活的蛇的数量正相关。达到上限后，将暂停自然生成食物。
-死亡转化：蛇死亡后，其身体所在的位置会根据其分数转化为新的食物（每份食物价值最高为20分，直至分数耗尽）。
-5. 宝箱机制
-宝箱
-仅在游戏中期和后期刷新，每局游戏最多出现两个。
-其分数在刷新时根据战局动态计算并固定，旨在为落后玩家提供追赶机会。计算公式为 基础分 + (第一名分数 - 非第一名平均分) * 0.6，最终分数被限制在30到75之间。
-对于未持有钥匙的蛇，宝箱是一个致命障碍物，触碰即死且护盾无效。
-钥匙
-与宝箱同步刷新，数量为 max(2, floor(存活蛇数 / 2))，上限为4把。
-蛇头触碰地上的钥匙即可拾取。
-掉落规则：
-持有者死亡时，钥匙会掉落在其头部位置。
-连续持有钥匙超过30个游戏刻，钥匙会自动从持有者身上脱落，出现在其头部侧方。
-交互规则：蛇头必须在持有钥匙的状态下触碰宝箱，才能成功开启并获得其全部分数。宝箱一旦被开启，场上所有其他的钥匙都会立即消失。
-6. 安全区机制
-安全区是游戏中的核心活动区域，所有玩家都应尽量使其头部保持在安全区内。
+2. Game map
+Map size: 40 × 30 tiles (width × height)
+Coordinate system: The grid in the upper left corner is (0, 0), the x-axis is incremented to the right, and the y-axis is incremented downward.
+3. Game entity
+1. Snake
+Initial length: 5 tiles
+Move: Move one tile per tick. The snake consists of a head and a body, which moves along the path the head has taken.
+2. Field items
+Ordinary food: 1-5 points are provided, and the color of food with different points is different.
+Grow beans: Increases the length of the snake by two blocks, does not provide a score, and has a value of -1.
+Trap: 10 points are deducted after eating, and its value is -2.
+4. Game mechanism
+1. The growth of the snake
+Score Increase: Every time the snake's score reaches a multiple of 20, the length will automatically increase by one square.
+Direct Growth: Eating a growth bean will instantly increase the length by two blocks.
+2. Shield system
+Snakes are born with an initial shield that lasts for 10 game ticks.
+Players can spend 20 points to actively activate the shield. Activating the shield is a decision-making action, and the game will stay in place.
+The shield lasts for 5 game moments after activation, during which time the snake is immune to death from collisions (except for walls).
+Actively activated shields have a cooldown of 30 game ticks.
+3. Collision rules
+Collision with an obstacle: the snake dies instantly. This rule has the highest priority and the shield is invalid
+Collision with your own body: no effect, no death
+Collision with other snake bodies:
+Holding a shield: Immune to collisions, can safely pass through the opponent's snake's body
+Without shield: The colliding party dies instantly
+Snake head collides with snake head:
+Both sides have shields: neither side is harmless
+Only one side has a shield: The side without the shield dies
+Neither side has a shield: both die at the same time
+4. Food generation
+An initial batch of food will be generated at the beginning of the game, and new food will be generated periodically every 3 playtime moments.
+Life Cycle: Items on the field will disappear if they are not picked up for a long time.
+Normal food: 60 game ticks
+Growth Beans/Traps: 80 game ticks
+Quantity limit: The maximum number of simultaneous food on the field is positively correlated with the number of currently alive snakes. When the limit is reached, natural food generation will be paused.
+Death Transformation: After the snake dies, its body is converted into new food based on its score (each serving of food is worth up to 20 points until the score is exhausted).
+5. Treasure chest mechanic
+Treasure chest
+Refreshes only in the mid and late games, with a maximum of two per game.
+Its score is dynamically calculated and fixed based on the battle situation when refreshed, designed to provide catch-up opportunities for players who are lagging behind. The formula is basic score + (1st place score - non-1st place average score) * 0.6, and the final score is limited to between 30 and 75.
+For snakes without keys, chests are a deadly obstacle that dies instantly when touched and their shields are nullified.
+key
+Synchronized with the treasure chest, the number is max(2, floor (number of surviving snakes / 2)), and the maximum is 4.
+The snake head can be picked up by touching the key on the ground.
+Drop Rules:
+When the holder dies, the key drops at their head.
+If you hold the key for more than 30 game ticks in a row, the key will automatically fall off the holder and appear on the side of its head.
+Interaction rules: The snake head must touch the treasure chest while holding the key to successfully open it and obtain its full score. Once the chest is opened, all other keys on the field will disappear immediately.
+6. Safe zone mechanism
+The safe zone is the core active area in the game, and all players should try to keep their head in the safe zone.
 
-蛇的头部一旦处于安全区之外，将立即死亡。蛇的身体部分可以暂时处于区外。
-开启护盾可以暂时免疫安全区外的伤害，但护盾结束后若头部仍在区外则依旧会立即死亡。
-所有新生成的食物都只会在当前安全区内出现。当安全区收缩时，位于新安全区外的存量食物会立即消失。
-安全区会随游戏阶段向地图中心收缩，具体如下：
-游戏阶段	游戏刻范围	收缩事件	最终尺寸	最终边界 (x_min,y_min) -> (x_max,y_max)
-早期	1 - 80	稳定	40 × 30	(0,0) -> (39,29)
-中期	81 - 100	第一次收缩	34 × 26	(3,2) -> (36,27)
-161 - 180	第二次收缩	26 × 20	(7,5) -> (32,24)
-后期	221 - 240	最终收缩	20 × 16	(10,7) -> (29,22)
-241 - 256	最终形态
-7. 游戏阶段
-游戏全程共256个游戏刻，分为三个阶段，不同阶段的场上资源分布有所侧重：
+The snake's head will die immediately once it is outside the safe zone. The body part of the snake can be temporarily outside the zone.
+Turning on the shield temporarily makes you immune to damage outside the safe zone, but if the head remains outside the zone after the shield ends, you will still die immediately.
+All newly generated food will only appear within the current safe zone. When the safe zone shrinks, the stock of food located outside the new safe zone disappears immediately.
+The safe zone shrinks to the center of the map with the game stage as follows:
+game stage game tick range contraction event final size final boundary (x_min,y_min) -> (x_max,y_max)
+Early 1 - 80 Stable 40 × 30 (0,0) -> (39,29)
+Intermediate 81 - 100 First contraction 34 × 26 (3,2) -> (36,27)
+161 - 180 Second contraction 26 × 20 (7,5) -> (32,24)
+Late 221 - 240 Final contraction 20 × 16 (10,7) -> (29,22)
+241 - 256 Final Pattern
+7. Game Phase
+The game has a total of 256 game moments, divided into three stages, and the distribution of resources on the field at different stages is focused:
 
-早期阶段 (1 - 80 游戏刻)
-该阶段侧重于初始发育，主要生成低分食物和增长豆。
-食物权重：普通食物(1-3分) 80%，增长豆 20%。
-中期阶段 (81 - 200 游戏刻)
-引入高分食物、陷阱，并会刷新第一个宝箱，竞争开始加剧。
-食物权重：普通食物(1-5分) 78%，增长豆 12%，陷阱 10%。
-后期阶段 (201 - 256 游戏刻)
-高风险高回报，战局瞬息万变。可能刷新第二个宝箱。
-食物权重：普通食物(1-5分) 80%，增长豆 5%，陷阱 15%。
-五、游戏结束条件
-达到256个游戏刻上限。
-场上已无任何蛇存活。
+Early Stages (1 - 80 game ticks)
+This stage focuses on initial development, mainly generating low-fraction foods and growing beans.
+Food weight: 80% for regular food (1-3 points), 20% for growth beans.
+Mid Stage (81 - 200 game ticks)
+Introducing high-scoring food, traps, and refreshing the first chest, competition begins to intensify.
+Food weight: Regular food (1-5 points) 78%, growth beans 12%, trap 10%.
+Later stages (201 - 256 game ticks)
+High risk and high reward, the battle situation is changing rapidly. Possibility to refresh a second chest.
+Food weight: 80% for regular food (1-5 points), 5% for growth beans, 15% for traps.
+5. Game end conditions
+Reach the 256 game tick limit.
+There were no snakes alive on the field.

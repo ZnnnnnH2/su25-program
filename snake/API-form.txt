@@ -1,67 +1,67 @@
-一、通信协议
-算法程序在每个游戏刻运行一次，通过标准输入（stdin）读取每 tick 的游戏状态，并通过标准输出（stdout）提交决策。
+1. Communication protocol
+The algorithmic program runs once per tick tick, reads the game state for each tick via standard input (stdin), and submits decisions through standard output (stdout).
 
-二、输入格式
-在每个游戏刻开始时，游戏状态信息会以纯文本形式发送到算法程序的标准输入。所有坐标信息均遵循y x的顺序。
+2. Input format
+At the beginning of each game tick, game state information is sent in plain text to the algorithm's standard input. All coordinate information follows the order of y x.
 
-剩余游戏刻
-物品总数
+There are still game moments left
+Total number of items
 y1 x1 v1 t1
 ...
-蛇总数
+Total number of snakes
 id1 len1 score1 dir1 shield_cd1 shield_time1
 y1_1 x1_1
 ...
 id2 len2 score2 dir2 shield_cd2 shield_time2
 ...
-宝箱总数
+Total number of chests
 y_chest1 x_chest1 score1
 ...
-钥匙总数
+Total number of keys
 y_key1 x_key1 holder_id1 remaining_time1
 ...
-当前安全区_xmin 当前安全区_ymin 当前安全区_xmax 当前安全区_ymax
-下次收缩时刻 下次安全区_xmin 下次安全区_ymin 下次安全区_xmax 下次安全区_ymax
-最终收缩时刻 最终安全区_xmin 最终安全区_ymin 最终安全区_xmax 最终安全区_ymax
+Current Security Zone _xmin Current Security Zone _ymin Current Security Zone _xmax Current Security Zone _ymax
+next contraction moment next safe zone _xmin next safe zone _ymin next safe zone _xmax next safe zone _ymax
+final contraction moment final safe zone _xmin final safe zone _ymin final safe zone _xmax final safe zone _ymax
 
-[可选] 上一回合存储在Memory系统中的数据
-1. 物品信息
-首先是场上物品总数，随后每一行代表一个物品，格式为 y x v t。
+[Optional] Data stored in the Memory system in the previous round
+1. Item information
+It starts with the total number of items on the field, followed by each row representing an item in the format y x v t.
 
-物品值 v 的含义：
-1 至 5：普通食物，提供对应分数。
--1：增长豆。
--2：陷阱。
--3：钥匙（在地上，可拾取）。
--5：宝箱（未持有钥匙时视为障碍物）。
-最后一个数字 t 表示物品剩余的存活时间（tick）。如果物品永远不会消失，t 为 -1。
+Meaning of item value v:
+1 to 5: Normal food, with corresponding scores.
+-1: Grow beans.
+-2: Trap.
+- 3: Key (on the ground, pickable).
+-5: Treasure chest (considered an obstacle if you do not hold the key).
+The last number, t, indicates the remaining survival time (tick) of the item. If the item never disappears, t is -1.
 
-2. 玩家信息
-在物品信息之后，是存活的蛇总数，随后是每一条蛇的具体信息。
+2. Player Information
+After the item information, there is the total number of snakes alive, followed by specific information about each snake.
 
-第一行是蛇的综合属性：
-id：玩家ID（即学号）。
-len：蛇的当前长度。
-score：当前分数。
-dir：当前移动方向 (0-左, 1-上, 2-右, 3-下)。
-shield_cd：护盾冷却时间 (0表示可用)。
-shield_time：护盾剩余有效时间。
-后续 len 行是蛇每一节身体的坐标，从蛇头到蛇尾。
-3. 宝箱与钥匙附加信息
-首先是一个数字，代表未开启的宝箱数量（目前只可能是0或1）
-然后是宝箱信息：格式为 y x score，表示宝箱的坐标和开启后可获得的分数。
-然后是一个数字，代表场上所有钥匙的总数（包括地上的和蛇持有的）
-最后是每个钥匙的信息：格式为 y x holder_id remaining_time。
-holder_id：如果为-1，表示钥匙在地上；否则为持有该钥匙的玩家ID。
-remaining_time：若钥匙被持有，此为自动掉落的剩余时间；若在地上，此值为0。
-4. 安全区信息
-输入信息的最后是三行关于安全区的数据
+The first line is the comprehensive attributes of snakes:
+id: Player ID (i.e. student number).
+len: The current length of the snake.
+score: The current score.
+dir: The current direction of movement (0-left, 1-up, 2-right, 3-down).
+shield_cd: Shield cooldown (0 is available).
+shield_time: Shield remaining validity time.
+The subsequent len line is the coordinates of each section of the snake's body, from the snake's head to the snake's tail.
+3. Chests and keys Additional information
+The first is a number representing the number of unopened chests (currently it can only be 0 or 1)
+Then there's the chest information: in the format y x score, it indicates the chest's coordinates and the score you can get when you open it.
+Then there is a number that represents the total number of all keys on the field (both on the ground and held by the snake)
+Finally, the information for each key: in the format y x holder_id remaining_time.
+holder_id: If -1, it means the key is on the ground; Otherwise, it is the player ID that holds the key.
+remaining_time: If the key is held, this is the remaining time for the automatic drop; If on the ground, this value is 0.
+4. Safe Zone Information
+The input information ends with three lines of data about the safe zone
 
-第一行：xmin ymin xmax ymax，描述当前安全区的边界。
-第二行：next_tick next_xmin next_ymin next_xmax next_ymax。这里的next_tick表示“下一次边界实际发生变化”的刻（即下一次从当前边界向内收缩的首个刻），并给出该刻对应的目标边界；若未来没有变化，next_tick为-1，边界重复当前值。
-第三行：final_tick final_xmin final_ymin final_xmax final_ymax。表示“当前/下一次收缩阶段的完成刻”和到达时的最终边界；若安全区不再收缩，final_tick为-1。
-5. 输入示例
-以下是游戏后期某一刻（第217 tick）的完整输入数据示例：
+First line: xmin ymin xmax ymax, describing the boundaries of the current safe zone.
+Second row: next_tick next_xmin next_ymin next_xmax next_ymax. The next_tick here represents the moment when the next boundary actually changes (i.e., the first moment when the next boundary contracts inward from the current boundary), and gives the target boundary corresponding to that moment. If there is no change in the future, the next_tick is -1, and the boundary repeats the current value.
+Third row: final_tick final_xmin final_ymin final_xmax final_ymax. Indicates the "moment of completion of the current/next contraction phase" and the final boundary when reached; If the safe zone no longer shrinks, the final_tick is -1.
+5. Enter an example
+Here is an example of the full input data at a certain point in the late game (tick 217):
 
 39
 17
@@ -102,61 +102,61 @@ remaining_time：若钥匙被持有，此为自动掉落的剩余时间；若在
 228 8 5 31 24
 241 10 7 29 22
 1 5 13
-数据解读：
+Data interpretation:
 
-游戏进程: 剩余 39 tick（当前是第 256-39=217 tick）。
-物品: 场上共有 17 个物品，包括高分食物、增长豆、陷阱(-2)、一个宝箱(-5)和两把在地上的钥匙(-3)。
-蛇: 场上有 1 条蛇。
-ID 2000000000: 长度为 9，分数为 82。当前朝向左(0)，护盾可用。
-宝箱与钥匙: 场上有 1 个价值30分的宝箱，和 2 把都在地上的钥匙（holder_id = -1）。
-安全区:
-当前安全区为 7 5 32 24。
-最终的收缩将在第 228 tick 开始（届时边界变为 8 5 31 24），并将在第 241 tick 完成，最终边界为 10 7 29 22。
-Memory数据: 上一回合存储了 1 5 13。
-三、输出格式
-您的算法程序需要向标准输出（stdout）打印一个整数作为本回合的决策。
+Game progression: 39 ticks remaining (currently 256-39=217 ticks).
+Items: There are a total of 17 items on the field, including high-scoring food, growth beans, traps (-2), a chest (-5), and two keys on the ground (-3).
+Snake: There is 1 snake on the field.
+ID 2000000000: Length is 9 with a score of 82. The shield is currently facing left (0), and the shield is available.
+Chests and Keys: There is 1 chest worth 30 points and 2 keys on the ground (holder_id = -1).
+Safe Zone:
+The current safe zone is 7 5 32 24.
+The final contraction will begin on tick 228 (when the boundary becomes 8 5 31 24) and will finish on tick 241 with a final boundary of 10 7 29 22.
+MemoryData: 1 5 13 was stored in the last turn.
+3. Output format
+Your algorithm needs to print an integer to the standard output (stdout) as the decision for this round.
 
-0：向左移动
-1：向上移动
-2：向右移动
-3：向下移动
-4：激活护盾 (在原地停留一回合)
-四、持久化存储 (Memory 系统)
-为了支持需要跨回合记忆状态的复杂算法，平台提供了一个持久化存储（Memory）系统。每个算法实例在单局游戏中都拥有一块独立的、可读写的数据空间。
+0: Move to the left
+1: Move up
+2: Move to the right
+3: Move down
+4: Activate the shield (stay in place for one turn)
+4. Persistent storage (Memory system)
+To support complex algorithms that require cross-turn memory of states, the platform provides a persistent storage (Memory) system. Each algorithm instance has a separate, read/write data space in a single game.
 
-1. 数据写入
-在您的程序输出决策（0-4的整数）并换行后，可以继续输出任意格式的字符串。这部分字符串将被系统捕获并存入您的专属 Memory 空间。请注意：每次写入都会完全覆盖上一次存储的内容。
+1. Data writes
+After your program outputs the decision (integer of 0-4) and wraps the line, you can proceed to output the string in any format. This part of the string will be captured by the system and stored in your dedicated Memory space. Please note: each write completely overwrites the last stored content.
 
-例如，输出以下内容：
+For example, output the following:
 
 2
-TARGET:10,20;STATE:ATTACK;PREV_SCORE:150
-系统会将决策2（向右）提交给游戏引擎，并将第二行的字符串TARGET:10,20;STATE:ATTACK;PREV_SCORE:150存入您的Memory中。
+TARGET:10,20; STATE:ATTACK; PREV_SCORE:150
+The system will submit decision 2 (to the right) to the game engine and put the string TARGET:10,20 in the second line; STATE:ATTACK; PREV_SCORE:150 is deposited in your Memory.
 
-请注意，这里只是一个示例，实际可以存储任意文本格式的内容。最大限制为 4KB。
+Note that this is just an example, and it is actually possible to store content in any text format. The maximum limit is 4KB.
 
-2. 数据读取
-在下一个游戏刻，您上一回合存储的内容将会被原样附加到标准输入的末尾，位于所有常规游戏状态信息（安全区信息等）之后。
+2. Data reading
+At the next game moment, your previous round saved content will be appended to the end of the standard input as is, after all regular game state information (safe zone information, etc.).
 
-在游戏的第一个游戏刻，由于没有前一回合的存储，Memory 部分将为空（即输入在安全区信息后直接结束）。
+At the first tick of the game, the Memory section will be empty (i.e., the input ends directly after the safe zone information) as there is no storage for the previous round.
 
-五、限制与错误处理
-1. 资源限制
-中央处理器时间限制：1秒
-内存限制：1GB
-墙上时钟限制：5秒
-2. 决策失败
-如果算法程序出现以下情况，您的蛇将被判定为决策失败并立即死亡：
+5. Restrictions and error handling
+1. Resource constraints
+CPU time limit: 1 second
+Memory limit: 1GB
+Wall clock limit: 5 seconds
+2. Decision failure
+Your snake will be judged to have failed to make a decision and die immediately if the algorithmic program has the following:
 
-程序崩溃或异常退出。
-超出时间或内存限制。
-输出了无效的决策值。
-决策直接导致撞上地图边界或其他致命障碍物。
-六、运行环境与编译
-1. 运行环境
-您的代码将在 x86-64 架构的 Linux 服务器上编译和运行。 我们使用的编译器版本为 g++ 14.2.0。
+Program crashes or abnormal exits.
+Exceeding the time or memory limit.
+Invalid decision values are output.
+Decisions lead directly to crashing into map boundaries or other deadly obstacles.
+6. Running environment and compilation
+1. Operating environment
+Your code will compile and run on an x86-64 architecture Linux server. The compiler version we are using is g++ 14.2.0.
 
-2. 编译命令
-平台将使用以下命令来编译您的 .cpp 文件。请确保您的代码能够在此环境与编译选项下正常工作。
+2. Compile commands
+The platform will use the following command to compile your .cpp file. Make sure your code works properly in this environment with the compilation options.
 
 g++ -std=c++23 -O2 -Wall your_file.cpp -o program
