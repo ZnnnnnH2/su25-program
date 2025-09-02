@@ -886,8 +886,45 @@ static Choice decide(const State &s)
             if (!in_bounds(ny, nx))
                 continue;
 
-            // 检查是否有障碍物（除了安全区边界外的其他障碍）
+            // 检查是否有障碍物（包括自己的身体和敌方蛇体）
             bool blocked = false;
+
+            // 检查自己的身体碰撞（除了尾巴可能会移动）
+            for (int i = 0; i < me.body.size() - 1; i++)
+            {
+                if (me.body[i].y == ny && me.body[i].x == nx)
+                {
+                    blocked = true;
+                    break;
+                }
+            }
+
+            // 检查敌方蛇体碰撞
+            if (!blocked)
+            {
+                for (const auto &enemy : s.snakes)
+                {
+                    if (enemy.id == MYID)
+                        continue;
+                    for (const auto &p : enemy.body)
+                    {
+                        if (p.y == ny && p.x == nx)
+                        {
+                            blocked = true;
+                            break;
+                        }
+                    }
+                    if (blocked)
+                        break;
+                }
+            }
+
+            // 检查掉头
+            int opposite_dir = (me.dir + 2) % 4;
+            if (k == opposite_dir)
+            {
+                blocked = true;
+            }
 
             if (blocked)
             {
