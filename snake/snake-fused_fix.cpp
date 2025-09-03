@@ -311,7 +311,8 @@ bool determine_tie_winner(const Snake &me, const Snake &enemy, const Point &targ
         return false;
     return false;
 }
-
+string str_info;
+State global_state;
 /**
  * 护盾使用条件检查
  * 判断是否可以主动开启护盾
@@ -321,11 +322,12 @@ bool determine_tie_winner(const Snake &me, const Snake &enemy, const Point &targ
  */
 inline bool can_open_shield(const Snake &me)
 {
+    if (global_state.remaining_ticks <= 5)
+    {
+        return false; // 游戏结束前5回合不考虑开启护盾
+    }
     return me.shield_cd == 0 && me.score >= SHIELD_COST_THRESHOLD;
 }
-
-string str_info;
-State global_state; // 全局游戏状态
 
 // ==================== 常量定义 ====================
 static constexpr int INF_DIST = 1000000000; // BFS算法中的无穷大距离常量
@@ -1228,6 +1230,9 @@ BFSOut bfs_grid(const GridMask &M, const State &s, int sy, int sx,
                 continue; // outside safe zone blocked
             if (M.blocked(ny, nx))
                 continue;
+            // 修复：添加蛇身碰撞检查，考虑护盾情况
+            if (M.is_snake(ny, nx) && path_snake.shield_time == 0)
+                continue; // 无护盾时不能穿过敌方蛇身
 
             // forbid U-turn only for the very first step from the source
             if (cy == sy && cx == sx && k == opposite_dir)
@@ -1317,9 +1322,19 @@ vector<CompetitionAnalysis> analyze_competition(const State &s, const GridMask &
                 continue;
 
             // 简化竞争分析：直接使用曼哈顿距离计算?
-            Point enemy_head = enemy.head();
-            int enemy_dist = manhattan(enemy_head.y, enemy_head.x, target.y, target.x);
+            // Point enemy_head = enemy.head();
+            // Build symmetric mask for competition: copy M, add my body as snake to penalize equally
+            GridMask M2 = M;
+            const auto &__me_for_comp = s.self();
+            for (const auto &__p : __me_for_comp.body)
+                M2.snake(__p.y, __p.x);
 
+            // Use enemy-view BFS (with &enemy) to respect walls/zone/U-turn rule
+            Point enemy_head = enemy.head();
+            BFSOut enemy_G = bfs_grid(M2, s, enemy_head.y, enemy_head.x, &enemy);
+            int enemy_dist = enemy_G.dist[target.y][target.x];
+            if (enemy_dist >= INF_DIST)
+                enemy_dist = INT_MAX / 2;
             // 创建竞争分析结果
             CompetitionAnalysis comp;
             comp.target = target;
@@ -1475,19 +1490,19 @@ void improve_route_ls(const GridMask &M, const State &s, Point head, Route &R)
         sort(remaining.begin(), remaining.end());
 
         // 重建路径序列：第一个目标 + 按距离排序的剩余目标
+        const auto __original_seq = R.seq;
         vector<Point> new_seq;
         new_seq.push_back(first_target);
         for (const auto &item : remaining)
         {
             new_seq.push_back(R.seq[item.second]);
         }
-        R.seq = new_seq;
-
+        // defer commit until validated
         // 重新计算总时间（使用准确的BFS计算法?
         // 这确保路径时间估算的准确�?
         int total_time = 0;
         Point cur_pos = head;
-        for (const auto &target : R.seq)
+        for (const auto &target : new_seq)
         {
             BFSOut path = bfs_grid(M, s, cur_pos.y, cur_pos.x);
             int d = path.dist[target.y][target.x];
@@ -1495,7 +1510,8 @@ void improve_route_ls(const GridMask &M, const State &s, Point head, Route &R)
             // 安全检查：如果某个目标不可达，保持原路径?
             if (d >= INF_DIST)
             {
-                return; // 回退到原始路径?
+                R.seq = __original_seq; /* revert */
+                return;
             }
             total_time += d;
             cur_pos = target; // 更新当前位置
@@ -1630,6 +1646,9 @@ int astar_first_step(const GridMask &M, const State &s, const Point &start, cons
                 continue;
             if (M.blocked(ny, nx))
                 continue;
+            // 修复：添加蛇身碰撞检查，考虑护盾情况
+            if (M.is_snake(ny, nx) && s.self().shield_time == 0)
+                continue; // 无护盾时不能穿过敌方蛇身
             int step = 1;
             if (M.danger_rows[ny].test(nx))
                 step += (s.self().shield_time > 0 ? 1 : 5);
@@ -1729,6 +1748,9 @@ int astar_first_step_detailed(const GridMask &M,
                 continue; // 遍历合法性使用当前区域
             if (M.blocked(ny, nx))
                 continue;
+            // 修复：添加蛇身碰撞检查，考虑护盾情况
+            if (M.is_snake(ny, nx) && ps.shield_time == 0)
+                continue; // 无护盾时不能穿过敌方蛇身
             if (cy == start.y && cx == start.x && k == opposite)
                 continue; // 避免立即U型转弯
 
@@ -2772,7 +2794,13 @@ Choice decide(const State &s)
             if (enemy.id == MYID)
                 continue;
 
-            BFSOut enemy_G = bfs_grid(M, s, enemy.head().y, enemy.head().x);
+            GridMask M2 = M;
+            {
+                const auto &__me_for_comp = s.self();
+                for (const auto &__p : __me_for_comp.body)
+                    M2.snake(__p.y, __p.x);
+            }
+            BFSOut enemy_G = bfs_grid(M2, s, enemy.head().y, enemy.head().x, &enemy);
             int enemy_dist = enemy_G.dist[goal.y][goal.x];
 
             if (enemy_dist < INF_DIST)
@@ -3032,7 +3060,7 @@ Choice decide(const State &s)
 int main()
 {
     // #ifndef ONLINE_JUDGE
-    //     freopen("D:/su25-program/snake/input.in", "r", stdin); // debug only
+    // freopen("D:/su25-program/snake/input.in", "r", stdin); // debug only
     // #endif
     // ios::sync_with_stdio(false);
     cin.tie(nullptr);
