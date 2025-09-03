@@ -41,6 +41,12 @@ static constexpr int SAFE_ZONE_SHRINK_THRESHOLD = 4;     // 安全区收缩阈�
 static constexpr int ENEMY_BODY_PROXIMITY_THRESHOLD = 2; // 敌蛇身体危险邻近阈值
 static constexpr int TRAP_PROXIMITY_THRESHOLD = 2;       // 陷阱危险邻近阈值
 
+// ==================== 新增常量 ====================
+static constexpr int FUTURE_SAFE_FALLBACK_ALLOW_UTURN = 0; // 避免立即U型转弯（如果可能）
+static constexpr int TTL_DECAY_GRACE_TICKS = 1;            // TTL软衰减的宽限期（ticks）
+static constexpr double TTL_DECAY_TAU = 4.0;               // TTL衰减时间常数，值越大衰减越慢
+static constexpr int NEAR_ENEMY_ADJ_PENALTY = 2;           // 靠近敌方蛇身的邻接惩罚
+
 // ==================== 数据结构定义 ====================
 // 与游戏引擎格式对齐的结构体
 
@@ -319,6 +325,38 @@ inline int danger_safe_zone(const Safe &z, int y, int x)
 static const int DX[4] = {-1, 0, 1, 0}; // x方向偏移：左、上、右、下
 static const int DY[4] = {0, -1, 0, 1}; // y方向偏移：左、上、右、下
 static const int ACT[4] = {0, 1, 2, 3}; // 索引0..3 -> 动作代码
+static constexpr int INF_DIST = 1e9;    // 无限距离常量
+
+// ==================== 新增辅助函数 ====================
+
+/**
+ * 计算一步之后将生效的安全区域
+ */
+static inline Safe zone_after_one_step(const State &s)
+{
+    if (s.next_tick != -1 && s.current_ticks + 1 >= s.next_tick)
+        return s.next;
+    return s.cur;
+}
+
+/**
+ * TTL软衰减函数
+ * 当ETA（距离）超过生命周期时应用软衰减而不是硬丢弃
+ */
+static bool ttl_soft_decay(double &score, int dist, int lifetime,
+                           int grace_ticks = TTL_DECAY_GRACE_TICKS,
+                           double tau = TTL_DECAY_TAU)
+{
+    if (lifetime < 0)
+        return true; // 永久物品
+    int late = dist - (lifetime + grace_ticks);
+    if (late <= 0)
+        return true; // 还没有迟到
+    score *= std::exp(-double(late) / tau);
+    if (!std::isfinite(score) || score < 1e-6)
+        return false; // 分数变得微不足道
+    return true;
+}
 
 /**
  * 网格掩码结构
@@ -477,6 +515,35 @@ inline bool can_open_shield()
     return false;
 }
 
+/**
+ * 选择一个在未来安全区内的替代方向
+ */
+static int pick_dir_staying_in_future_zone(const State &s,
+                                           const GridMask &M,
+                                           int sy, int sx,
+                                           int current_dir,
+                                           std::stringstream &log_ss)
+{
+    const Safe fut = zone_after_one_step(s);
+    const int opposite = (s.self().dir + 2) % 4;
+
+    for (int k = 0; k < 4; ++k)
+    {
+        if (!FUTURE_SAFE_FALLBACK_ALLOW_UTURN && k == opposite)
+            continue;
+        int ny = sy + DY[k], nx = sx + DX[k];
+        if (!in_bounds(ny, nx))
+            continue;
+        if (M.blocked(ny, nx))
+            continue;
+        if (!in_safe_zone(fut, ny, nx))
+            continue;
+        log_ss << "FUTURE_SAFE_REPLACE_DIR=" << k << "|";
+        return k;
+    }
+    return -1;
+}
+
 // ==================== 广度优先搜索 (BFS) ====================
 
 /**
@@ -582,6 +649,204 @@ static BFSOut bfs_grid(const GridMask &M, const State &s, int sy, int sx)
         }
     }
     return out;
+}
+
+// ==================== 新增辅助函数实现 ====================
+
+/**
+ * 生存策略函数
+ * 当没有其他选择时的应急措施
+ */
+static int survival_strategy(const State &s, int sy, int sx, std::stringstream &log_ss, GridMask &M)
+{
+    const Snake &me = s.self();
+
+    // 寻找可达性最好的安全移动方向
+    int bestDir = -1;
+    int bestReach = -1;
+
+    for (int k = 0; k < 4; ++k)
+    {
+        int ny = sy + DY[k], nx = sx + DX[k];
+
+        if (!in_bounds(ny, nx) || !in_safe_zone(s.cur, ny, nx) || M.blocked(ny, nx))
+            continue;
+        if (M.is_danger(ny, nx) && me.shield_time == 0)
+            continue;
+
+        // 计算可达性得分
+        int reachScore = 0;
+        BFSOut tempG = bfs_grid(M, s, ny, nx);
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                if (tempG.dist[y][x] < INF_DIST)
+                    reachScore++;
+
+        if (reachScore > bestReach)
+        {
+            bestReach = reachScore;
+            bestDir = k;
+        }
+    }
+
+    if (bestDir != -1)
+    {
+        log_ss << "SURVIVAL_MOVE:DIR" << bestDir << "|";
+        return ACT[bestDir];
+    }
+
+    // 尝试开盾
+    if (me.shield_time == 0 && can_open_shield())
+    {
+        log_ss << "SURVIVAL_SHIELD|";
+        return 4;
+    }
+
+    // 绝望移动
+    for (int k = 0; k < 4; ++k)
+    {
+        int ny = sy + DY[k], nx = sx + DX[k];
+        if (!in_bounds(ny, nx) || !in_safe_zone(s.cur, ny, nx) || M.blocked(ny, nx))
+            continue;
+        log_ss << "DESPERATE_DIR" << k << "|";
+        return ACT[k];
+    }
+
+    log_ss << "FORCED_FALLBACK|";
+    return 0;
+}
+
+/**
+ * 强制未来安全区或回退
+ * 如果移动会在缩圈后处于安全区外，尝试替代方向，否则使用护盾或生存策略
+ */
+static int enforce_future_safezone_or_fallback(const State &s,
+                                               const GridMask &M,
+                                               int sy, int sx,
+                                               int dir,
+                                               std::stringstream &log_ss)
+{
+    Safe fut = zone_after_one_step(s);
+    int ny = sy + DY[dir], nx = sx + DX[dir];
+
+    if (in_bounds(ny, nx) && in_safe_zone(fut, ny, nx))
+        return dir; // 缩圈后仍然安全
+
+    log_ss << "FUTURE_SAFE_BLOCK_DIR=" << dir << "|";
+
+    if (int alt = pick_dir_staying_in_future_zone(s, M, sy, sx, dir, log_ss); alt != -1)
+        return alt;
+
+    const Snake &me = s.self();
+    if (me.shield_time == 0 && can_open_shield())
+    {
+        log_ss << "FUTURE_SAFE_USE_SHIELD|";
+        return 4; // 护盾动作
+    }
+
+    log_ss << "FUTURE_SAFE_SURVIVAL|";
+    return survival_strategy(s, sy, sx, log_ss, const_cast<GridMask &>(M));
+}
+
+/**
+ * A*算法用于单目标的第一步提取
+ * 返回从起始点到目标的第一步方向
+ */
+static int astar_first_step(const GridMask &M,
+                            const State &s,
+                            Point start,
+                            Point goal,
+                            const Snake *snake_for_pathfinding = nullptr)
+{
+    if (!in_bounds(goal.y, goal.x))
+        return -1;
+    if (start.y == goal.y && start.x == goal.x)
+        return -1;
+
+    static int g[H][W];
+    static int parent_dir[H][W];
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x)
+            g[y][x] = INF_DIST, parent_dir[y][x] = -1;
+
+    const Snake &ps = snake_for_pathfinding ? *snake_for_pathfinding : s.self();
+    const int opposite = (ps.dir + 2) % 4;
+
+    auto h = [&](int y, int x)
+    { return std::abs(y - goal.y) + std::abs(x - goal.x); };
+
+    auto step_cost = [&](int y, int x)
+    {
+        int step = 1;
+        if (M.is_trap(y, x))
+            step += TRAP_STEP_COST;
+        bool near_snake = false;
+        for (int t = 0; t < 4; ++t)
+        {
+            int ay = y + DY[t], ax = x + DX[t];
+            if (in_bounds(ay, ax) && M.is_snake(ay, ax))
+            {
+                near_snake = true;
+                break;
+            }
+        }
+        if (near_snake)
+            step += NEAR_ENEMY_ADJ_PENALTY;
+        return step;
+    };
+
+    using Node = std::tuple<int, int, int>; // (f, y, x)
+    std::priority_queue<Node, std::vector<Node>, std::greater<Node>> pq;
+
+    g[start.y][start.x] = 0;
+    pq.emplace(h(start.y, start.x), start.y, start.x);
+
+    while (!pq.empty())
+    {
+        auto [fcur, cy, cx] = pq.top();
+        pq.pop();
+        if (cy == goal.y && cx == goal.x)
+            break;
+
+        for (int k = 0; k < 4; ++k)
+        {
+            int ny = cy + DY[k], nx = cx + DX[k];
+            if (!in_bounds(ny, nx))
+                continue;
+            if (!in_safe_zone(s.cur, ny, nx))
+                continue; // 使用当前区域进行遍历地图
+            if (M.blocked(ny, nx))
+                continue;
+            if (cy == start.y && cx == start.x && k == opposite)
+                continue; // 禁止立即U型转弯
+
+            int nd = g[cy][cx] + step_cost(ny, nx);
+            if (nd < g[ny][nx])
+            {
+                g[ny][nx] = nd;
+                parent_dir[ny][nx] = k; // parent -> (ny,nx) 边的方向
+                pq.emplace(nd + h(ny, nx), ny, nx);
+            }
+        }
+    }
+
+    if (g[goal.y][goal.x] >= INF_DIST)
+        return -1;
+
+    // 回溯一条边获取第一步
+    int ty = goal.y, tx = goal.x;
+    while (!(ty == start.y && tx == start.x))
+    {
+        int k = parent_dir[ty][tx];
+        if (k < 0)
+            return -1;
+        int py = ty - DY[k], px = tx - DX[k];
+        if (py == start.y && px == start.x)
+            return k;
+        ty = py;
+        tx = px;
+    }
+    return -1;
 }
 
 // ==================== 路径规划辅助函数 ====================
@@ -1100,18 +1365,24 @@ static Choice decide(const State &s)
             if (!(it.type >= 1 || it.type == -1))
                 continue;
 
-            // 可达性和生命周期检查
+            // 可达性检查
             if (!in_bounds(it.pos.y, it.pos.x) || !in_safe_zone(s.cur, it.pos.y, it.pos.x))
                 continue;
             int d = G.dist[it.pos.y][it.pos.x];
             if (d >= (int)1e9)
                 continue;
-            if (it.lifetime != -1 && d > it.lifetime)
-                continue;
 
             int v = (it.type >= 1) ? (it.type * NORMAL_FOOD_MULTIPLIER) : GROWTH_FOOD_VALUE;
             double life_factor = (it.lifetime == -1 ? 1.0 : pow(LIFETIME_SOFT_DECAY, d));
             double sc = (v * life_factor) / (d + DISTANCE_OFFSET);
+
+            // 应用TTL软衰减而不是硬截断
+            if (!ttl_soft_decay(sc, d, it.lifetime))
+            {
+                // 分数变得微不足道 -> 跳过以减少噪音
+                continue;
+            }
+
             C.push_back({it.pos, v, d, sc, it.lifetime});
         }
         if (C.empty())
@@ -1216,82 +1487,33 @@ static Choice decide(const State &s)
 
     // 发出朝向第一个目标的第一步
     auto goal = R.seq.front();
-    auto G2 = bfs_grid(M, s, head.y, head.x);
-    if (G2.parent[goal.y][goal.x] == -1)
-    {
-        int choice = last_choice();
-        return {choice};
-    }
 
-    // 重构一步（优先选择非危险邻居）
-    int cy = goal.y, cx = goal.x;
-    while (!(cy == head.y && cx == head.x))
-    {
-        int back = G2.parent[cy][cx];
-        int py = cy + DY[back], px = cx + DX[back];
-        if (py == head.y && px == head.x)
-            break;
-        cy = py;
-        cx = px;
-    }
-
-    int dir = -1;
-    for (int k = 0; k < 4; k++)
-        if (head.y + DY[k] == cy && head.x + DX[k] == cx)
-        {
-            dir = k;
-            break;
-        }
-
+    // 使用A*算法计算第一步
+    int dir = astar_first_step(M, s, {sy, sx}, goal);
     if (dir == -1)
     {
+        log_ss << "PATH_UNREACHABLE|";
         int choice = last_choice();
         return {choice};
     }
 
-    // 可选：在相等最短路径中选择非危险邻居
-    for (int k = 0; k < 4; k++)
-    {
-        int ny = head.y + DY[k], nx = head.x + DX[k];
-        if (!in_bounds(ny, nx) || M.blocked(ny, nx))
-            continue;
-        if (G2.dist[ny][nx] == G2.dist[goal.y][goal.x] - 1 && !M.is_danger(ny, nx))
-        {
-            dir = k;
-            break;
-        }
-    }
-
-    // 防止180度掉头检查
+    // 防止立即逆向移动（保留现有检查）
     int opposite_dir = (me.dir + 2) % 4;
     if (dir == opposite_dir)
     {
         log_ss << "ERROR:REVERSE_DIRECTION_BLOCKED|";
-        str_info += log_ss.str();
         int choice = last_choice();
         return {choice};
     }
 
-    string next_direction;
-    switch (dir)
-    {
-    case 0:
-        next_direction = "LEFT";
-        break;
-    case 1:
-        next_direction = "UP";
-        break;
-    case 2:
-        next_direction = "RIGHT";
-        break;
-    case 3:
-        next_direction = "DOWN";
-        break;
-    }
+    // 新增：针对缩圈的最后一英里安全防护
+    int final_dir = enforce_future_safezone_or_fallback(s, M, sy, sx, dir, log_ss);
 
-    log_ss << "MULTI_TARGET_MOVE:" << next_direction << ",a:" << ACT[dir] << "|";
+    // （保留原有的漂亮日志记录）
+    static const char *DSTR[4] = {"LEFT", "UP", "RIGHT", "DOWN"};
+    log_ss << "MULTI_TARGET_MOVE:" << DSTR[final_dir] << ",a:" << ACT[final_dir] << "|";
     str_info += log_ss.str();
-    return {ACT[dir]};
+    return {ACT[final_dir]};
 }
 
 // ==================== 主程序入口 ====================

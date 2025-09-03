@@ -84,6 +84,11 @@ static constexpr int ENEMY_BODY_PROXIMITY_THRESHOLD = 1; // 敌蛇身体危险�
 static constexpr int TRAP_PROXIMITY_THRESHOLD = 1;       // 陷阱危险邻近阈值
 static constexpr int NEAR_ENEMY_ADJ_PENALTY = 1;         // 邻近敌蛇身体的额外移动代价
 
+// ===== 新增：三个改进所需的可调参数 =====
+static constexpr int FUTURE_SAFE_FALLBACK_ALLOW_UTURN = 0; // 避免立即U型转弯（如果可能）
+static constexpr int TTL_DECAY_GRACE_TICKS = 1;            // TTL软衰减的宽限期
+static constexpr double TTL_DECAY_TAU = 4.0;               // TTL衰减时间常数，值越大衰减越慢
+
 // ==================== 路径选择偏好常量 ====================
 /**
  * 路径质量评估系统
@@ -629,6 +634,24 @@ inline int manhattan(int y1, int x1, int y2, int x2)
     return abs(y1 - y2) + abs(x1 - x2);
 }
 
+// ===== TTL软衰减函数 =====
+// 当ETA超过生命周期时应用软衰减而不是硬丢弃
+// 如果分数变得微不足道则返回false；否则返回true
+static bool ttl_soft_decay(double &score, int dist, int lifetime,
+                           int grace_ticks = TTL_DECAY_GRACE_TICKS,
+                           double tau = TTL_DECAY_TAU)
+{
+    if (lifetime < 0)
+        return true; // 永久物品
+    int late = dist - (lifetime + grace_ticks);
+    if (late <= 0)
+        return true;
+    score *= std::exp(-double(late) / tau);
+    if (!std::isfinite(score) || score < 1e-6)
+        return false;
+    return true;
+}
+
 /**
  * 网格掩码结构
  * 使用位掩码高效存储地图状态?
@@ -704,6 +727,45 @@ struct GridMask
         return (in_bounds(y, x) && in_safe_zone(global_state.cur, y, x)) ? trap_rows[y].test(x) : false;
     }
 };
+
+// ===== 未来安全区辅助函数 =====
+// 一步后将生效的安全区域
+static inline Safe zone_after_one_step(const State &s)
+{
+    if (s.next_tick != -1 && s.current_ticks + 1 >= s.next_tick)
+        return s.next;
+    return s.cur;
+}
+
+// 选择在未来安全区内的替代方向
+static int pick_dir_staying_in_future_zone(const State &s,
+                                           const GridMask &M,
+                                           int sy, int sx,
+                                           int current_dir,
+                                           std::stringstream &log_ss)
+{
+    const Safe fut = zone_after_one_step(s);
+    const int opposite = (s.self().dir + 2) % 4;
+
+    for (int k = 0; k < 4; ++k)
+    {
+        if (!FUTURE_SAFE_FALLBACK_ALLOW_UTURN && k == opposite)
+            continue;
+        int ny = sy + DY[k], nx = sx + DX[k];
+        if (!in_bounds(ny, nx))
+            continue;
+        if (M.blocked(ny, nx))
+            continue;
+        if (!in_safe_zone(fut, ny, nx))
+            continue;
+        log_ss << "FUTURE_SAFE_REPLACE_DIR=" << k << "|";
+        return k;
+    }
+    return -1;
+}
+
+// 前向声明
+int survival_strategy(const State &s, int sy, int sx, stringstream &log_ss, const GridMask &M);
 
 // ==================== 路径选择偏好函数 ====================
 
@@ -1514,6 +1576,279 @@ static int emergency_handle_outside_safe(const State &s, stringstream &log_ss, c
     return (best_suicide_dir != -1) ? ACT[best_suicide_dir] : 0;
 }
 
+// ===== A* shortest path (first step only) =====
+int astar_first_step(const GridMask &M, const State &s, const Point &start, const Point &goal)
+{
+    if (start.y == goal.y && start.x == goal.x)
+        return -1;
+
+    static int dist[H][W];
+    static signed char parent[H][W];
+    for (int y = 0; y < H; ++y)
+    {
+        for (int x = 0; x < W; ++x)
+        {
+            dist[y][x] = INT_MAX;
+            parent[y][x] = -1;
+        }
+    }
+
+    struct Node
+    {
+        int f, g, y, x;
+    };
+    auto cmp = [](const Node &a, const Node &b)
+    { return a.f > b.f; };
+    std::priority_queue<Node, std::vector<Node>, decltype(cmp)> pq(cmp);
+    auto h = [&](int y, int x)
+    { return abs(y - goal.y) + abs(x - goal.x); };
+
+    dist[start.y][start.x] = 0;
+    pq.push({h(start.y, start.x), 0, start.y, start.x});
+
+    while (!pq.empty())
+    {
+        Node cur = pq.top();
+        pq.pop();
+        if (cur.y == goal.y && cur.x == goal.x)
+            break;
+        if (cur.g != dist[cur.y][cur.x])
+            continue;
+
+        for (int k = 0; k < 4; ++k)
+        {
+            int ny = cur.y + DY[k], nx = cur.x + DX[k];
+            if (ny < 0 || ny >= H || nx < 0 || nx >= W)
+                continue;
+            if (!in_safe_zone(s.cur, ny, nx))
+                continue;
+            if (M.blocked(ny, nx))
+                continue;
+            int step = 1;
+            if (M.danger_rows[ny].test(nx))
+                step += (s.self().shield_time > 0 ? 1 : 5);
+            if (M.trap_rows[ny].test(nx))
+                step += 8;
+            int g2 = cur.g + step;
+            if (g2 < dist[ny][nx])
+            {
+                dist[ny][nx] = g2;
+                parent[ny][nx] = k;
+                pq.push({g2 + h(ny, nx), g2, ny, nx});
+            }
+        }
+    }
+    if (dist[goal.y][goal.x] == INT_MAX)
+        return -1;
+
+    // Walk back from goal to start to find the **first step** dir
+    int y = goal.y, x = goal.x, dir_from_prev = -1;
+    while (!(y == start.y && x == start.x))
+    {
+        int d = parent[y][x];
+        if (d == -1)
+            return -1;
+        int py = y - DY[d], px = x - DX[d];
+        dir_from_prev = d;
+        y = py;
+        x = px;
+    }
+    return dir_from_prev;
+}
+
+// ===== A*算法用于单目标第一步提取 =====
+// 返回方向0..3，如果不可达则返回-1。使用与Dijkstra相同的步骤代价模型。
+int astar_first_step_detailed(const GridMask &M,
+                              const State &s,
+                              Point start,
+                              Point goal,
+                              const Snake *snake_for_pathfinding = nullptr)
+{
+    if (!in_bounds(goal.y, goal.x))
+        return -1;
+    if (start.y == goal.y && start.x == goal.x)
+        return -1;
+
+    static int g[H][W];
+    static int parent_dir[H][W];
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x)
+            g[y][x] = INF_DIST, parent_dir[y][x] = -1;
+
+    const Snake &ps = snake_for_pathfinding ? *snake_for_pathfinding : s.self();
+    const int opposite = (ps.dir + 2) % 4;
+
+    auto h = [&](int y, int x)
+    { return std::abs(y - goal.y) + std::abs(x - goal.x); };
+
+    auto step_cost = [&](int y, int x)
+    {
+        int step = 1;
+        if (M.is_trap(y, x))
+            step += TRAP_STEP_COST;
+        bool near_snake = false;
+        for (int t = 0; t < 4; ++t)
+        {
+            int ay = y + DY[t], ax = x + DX[t];
+            if (in_bounds(ay, ax) && M.is_snake(ay, ax))
+            {
+                near_snake = true;
+                break;
+            }
+        }
+        if (near_snake)
+            step += NEAR_ENEMY_ADJ_PENALTY;
+        return step;
+    };
+
+    using Node = std::tuple<int, int, int>; // (f, y, x)
+    std::priority_queue<Node, std::vector<Node>, std::greater<Node>> pq;
+
+    g[start.y][start.x] = 0;
+    pq.emplace(h(start.y, start.x), start.y, start.x);
+
+    while (!pq.empty())
+    {
+        auto [fcur, cy, cx] = pq.top();
+        pq.pop();
+        if (cy == goal.y && cx == goal.x)
+            break;
+
+        for (int k = 0; k < 4; ++k)
+        {
+            int ny = cy + DY[k], nx = cx + DX[k];
+            if (!in_bounds(ny, nx))
+                continue;
+            if (!in_safe_zone(s.cur, ny, nx))
+                continue; // 遍历合法性使用当前区域
+            if (M.blocked(ny, nx))
+                continue;
+            if (cy == start.y && cx == start.x && k == opposite)
+                continue; // 避免立即U型转弯
+
+            int nd = g[cy][cx] + step_cost(ny, nx);
+            if (nd < g[ny][nx])
+            {
+                g[ny][nx] = nd;
+                parent_dir[ny][nx] = k; // 边方向：(cy,cx) -> (ny,nx)
+                pq.emplace(nd + h(ny, nx), ny, nx);
+            }
+        }
+    }
+
+    if (g[goal.y][goal.x] >= INF_DIST)
+        return -1;
+
+    // 回溯一条边获取第一步
+    int ty = goal.y, tx = goal.x;
+    while (!(ty == start.y && tx == start.x))
+    {
+        int k = parent_dir[ty][tx];
+        if (k < 0)
+            return -1;
+        int py = ty - DY[k], px = tx - DX[k];
+        if (py == start.y && px == start.x)
+            return k;
+        ty = py;
+        tx = px;
+    }
+    return -1;
+}
+
+// Prefer landing inside next zone when shrink is imminent (<=2 ticks)
+int enforce_future_safezone_or_fallback(const State &s, const GridMask &M,
+                                        int sy, int sx, int dir, std::stringstream &log_ss,
+                                        int ticks_guard = 2)
+{
+    auto ok = [&](int y, int x)
+    {
+        if (y < 0 || y >= H || x < 0 || x >= W)
+            return false;
+        if (!in_safe_zone(s.cur, y, x))
+            return false;
+        if (M.blocked(y, x))
+            return false;
+        return true;
+    };
+    int ny = sy + DY[dir], nx = sx + DX[dir];
+    bool shrink_imminent = (s.next_tick != -1) && (s.next_tick - s.current_ticks <= ticks_guard);
+
+    if (!ok(ny, nx))
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            if (k == (s.self().dir + 2) % 4)
+                continue;
+            int ty = sy + DY[k], tx = sx + DX[k];
+            if (ok(ty, tx))
+            {
+                log_ss << "OVERRIDE_DIR:" << k << "|";
+                return k;
+            }
+        }
+        return dir;
+    }
+    if (!shrink_imminent)
+        return dir;
+    if (in_safe_zone(s.next, ny, nx))
+        return dir;
+
+    int best = -1, best_h = INT_MAX;
+    for (int k = 0; k < 4; ++k)
+    {
+        if (k == (s.self().dir + 2) % 4)
+            continue;
+        int ty = sy + DY[k], tx = sx + DX[k];
+        if (!ok(ty, tx))
+            continue;
+        if (in_safe_zone(s.next, ty, tx))
+        {
+            int h = abs(ty - s.next.y_min) + abs(tx - s.next.x_min); // cheap heuristic
+            if (h < best_h)
+            {
+                best_h = h;
+                best = k;
+            }
+        }
+    }
+    if (best != -1)
+    {
+        log_ss << "SAFEZONE_OVERRIDE:" << best << "|";
+        return best;
+    }
+    return dir;
+}
+
+// 在返回动作前强制执行未来安全区
+// 如果下一个位置在缩圈后会处于安全区外，尝试替代方向，否则护盾，否则生存回退。
+static int enforce_future_safezone_or_fallback_detailed(const State &s,
+                                                        const GridMask &M,
+                                                        int sy, int sx,
+                                                        int dir,
+                                                        std::stringstream &log_ss)
+{
+    Safe fut = zone_after_one_step(s);
+    int ny = sy + DY[dir], nx = sx + DX[dir];
+
+    if (in_bounds(ny, nx) && in_safe_zone(fut, ny, nx))
+        return dir; // 缩圈后安全
+
+    log_ss << "FUTURE_SAFE_BLOCK_DIR=" << dir << "|";
+
+    if (int alt = pick_dir_staying_in_future_zone(s, M, sy, sx, dir, log_ss); alt != -1)
+        return alt;
+
+    const Snake &me = s.self();
+    if (me.shield_time == 0 && can_open_shield(me))
+    {
+        log_ss << "FUTURE_SAFE_USE_SHIELD|";
+        return 4; // 护盾
+    }
+
+    log_ss << "FUTURE_SAFE_SURVIVAL|";
+    return survival_strategy(s, sy, sx, log_ss, const_cast<GridMask &>(M));
+}
+
 // 完整的生存策略函数?- 当AI无法找到食物目标时的紧急生存逻辑
 // 用于处理没有明确目标时的移动决策，支持多层次的安全评估和生存策略
 int survival_strategy(const State &s, int sy, int sx, stringstream &log_ss, const GridMask &M)
@@ -2047,26 +2382,11 @@ Choice decide(const State &s)
                 continue; // 不可达的目标直接跳过
 
             // === 食物过期检查?===
-            // 确保食物在我们到达时还没有过�?
+            // 应用TTL软衰减而不是硬截断
             if (it.lifetime != -1) // -1表示永久有效的物�?
             {
-                // 计算到达目标位置时食物的剩余生命�?
-                int remaining_lifetime_on_arrival = it.lifetime - d;
-
-                // 如果食物在我们到达前就会过期，直接跳�?
-                if (remaining_lifetime_on_arrival <= 0)
-                {
-                    // 记录跳过的过期食物（仅记录前几个以避免日志过多）
-                    if (C.size() < 3)
-                    {
-                        log_ss << "SKIP_EXPIRED:(" << it.pos.y << "," << it.pos.x
-                               << ")d=" << d << ",life=" << it.lifetime << "|";
-                    }
-                    continue;
-                }
-
                 // 注意：如果食物到达时生命值很低，不会在这里跳�?
-                // 而是通过下面的LIFETIME_SOFT_DECAY机制来降低其优先�?
+                // 而是通过TTL_SOFT_DECAY机制来降低其优先�?
             }
 
             // === 安全区收缩风险评分?===
@@ -2291,6 +2611,13 @@ Choice decide(const State &s)
                     final_score *= 1.5; // 提升50%优先级
                     log_ss << "CHEST_PRIORITY_BOOST|";
                 }
+            }
+
+            // === 应用TTL软衰减而不是硬截断 ===
+            if (!ttl_soft_decay(final_score, d, it.lifetime))
+            {
+                // 分数变得微不足道 -> 跳过以减少噪音
+                continue;
             }
 
             // === 将评估后的候选目标加入列表 ===
@@ -2633,14 +2960,14 @@ Choice decide(const State &s)
         return {choice};
     }
 
-    // 路径重构：从目标回溯到起�?
-    int dir = reconstruct_first_step_dir(G2, head.y, head.x, goal.y, goal.x);
+    // 使用A*算法计算第一步（替换原来的BFS路径重构）
+    int dir = astar_first_step(M, s, {head.y, head.x}, goal);
 
-    log_ss << "PATH_RECONSTRUCTION:head=(" << head.y << "," << head.x << "),goal=(" << goal.y << "," << goal.x << "),dist=" << G2.dist[goal.y][goal.x] << "|";
+    log_ss << "ASTAR_RESULT:head=(" << head.y << "," << head.x << "),goal=(" << goal.y << "," << goal.x << "),dir=" << dir << "|";
 
     if (dir == -1)
     {
-        log_ss << "ENTER_SURVIVAL_MODE:[UNREACHABLE_OR_AT_TARGET]goal=(" << goal.y << "," << goal.x << ")|";
+        log_ss << "ENTER_SURVIVAL_MODE:[ASTAR_UNREACHABLE]goal=(" << goal.y << "," << goal.x << ")|";
         int choice = survival_strategy(s, sy, sx, log_ss, M);
         str_info += log_ss.str();
         return {choice};
@@ -2656,105 +2983,14 @@ Choice decide(const State &s)
         return {choice};
     }
 
-    // 检查原始路径的第一步是否安全，如果安全就使用原始路径?
-    int ny_original = head.y + DY[dir], nx_original = head.x + DX[dir];
-    bool original_safe = in_bounds(ny_original, nx_original) &&
-                         !M.blocked(ny_original, nx_original) &&
-                         !M.is_danger(ny_original, nx_original);
+    // 新增：针对缩圈的最后一英里安全防护
+    int final_dir = enforce_future_safezone_or_fallback(s, M, sy, sx, dir, log_ss);
 
-    // ==================== 新增：路径偏好安全检查?====================
-    // 即使路径"安全"，也要检查是否过于危险（死路等）
-    bool path_preference_safe = true;
-    if (original_safe)
-    {
-        int danger_penalty = calculate_path_danger_penalty(M, ny_original, nx_original, 50);
-        // 如果危险度惩罚过高，认为路径不够安全
-        if (danger_penalty > 250) // 高危险阈�?
-        {
-            path_preference_safe = false;
-            log_ss << "PATH_TOO_DANGEROUS:penalty=" << danger_penalty << "|";
-        }
-    }
-    // ============================================================
-
-    // 如果原始路径不安全或危险度过高，才寻找替代方向?
-    if (!original_safe || !path_preference_safe)
-    {
-        int target_dist = G2.dist[goal.y][goal.x];
-        int opposite_dir_alt = (me.dir + 2) % 4;
-        int best_alternative_dir = -1;
-        double best_alternative_score = -1000.0;
-
-        for (int k = 0; k < 4; k++)
-        {
-            if (k == dir)
-                continue; // 跳过已经检查过的原始方向?
-
-            // 防止掉头
-            if (k == opposite_dir_alt)
-                continue;
-
-            int ny = head.y + DY[k], nx = head.x + DX[k];
-            if (!in_bounds(ny, nx) || M.blocked(ny, nx))
-                continue;
-
-            // 只有当这个位置能够到达目标时才考虑
-            if (G2.dist[ny][nx] < 1000000000 &&
-                G2.dist[ny][nx] + manhattan(ny, nx, goal.y, goal.x) <= target_dist + 1)
-            {
-                if (!M.is_danger(ny, nx))
-                {
-                    // ==================== 新增：路径偏好评估替代方向?====================
-                    double alternative_score = 100.0; // 基础分数
-
-                    // 应用开阔度奖励
-                    double openness = calculate_openness(M, ny, nx);
-                    alternative_score *= (1.0 + openness * 0.4);
-
-                    // 扣除危险路径惩罚
-                    int danger_penalty = calculate_path_danger_penalty(M, ny, nx, 50);
-                    alternative_score -= danger_penalty;
-
-                    // 选择评分最高的替代方案
-                    if (alternative_score > best_alternative_score)
-                    {
-                        best_alternative_score = alternative_score;
-                        best_alternative_dir = k;
-                    }
-                    // ============================================================
-                }
-            }
-        }
-
-        // 如果找到了更好的替代方案，使用它
-        if (best_alternative_dir != -1)
-        {
-            dir = best_alternative_dir;
-            log_ss << "USING_SAFER_ALTERNATIVE:dir=" << dir
-                   << ",score=" << (int)best_alternative_score << "|";
-        }
-    }
-
-    string next_direction;
-    switch (dir)
-    {
-    case 0:
-        next_direction = "LEFT";
-        break;
-    case 1:
-        next_direction = "UP";
-        break;
-    case 2:
-        next_direction = "RIGHT";
-        break;
-    case 3:
-        next_direction = "DOWN";
-        break;
-    }
-
-    log_ss << "MULTI_TARGET_MOVE:" << next_direction << ",a:" << ACT[dir] << "|";
+    // （保留原有的漂亮日志记录）
+    static const char *DSTR[4] = {"LEFT", "UP", "RIGHT", "DOWN"};
+    log_ss << "MULTI_TARGET_MOVE:" << DSTR[final_dir] << ",a:" << ACT[final_dir] << "|";
     str_info += log_ss.str();
-    return {ACT[dir]};
+    return {ACT[final_dir]};
 }
 
 // ==================== 主程序入口 ====================
@@ -2775,13 +3011,15 @@ Choice decide(const State &s)
  */
 int main()
 {
-    freopen("D:\\su25-program\\snake\\input.in", "r", stdin); // 调试用，实际使用时注释掉
-    ios::sync_with_stdio(false);
+    // #ifndef ONLINE_JUDGE
+    //     freopen("D:/su25-program/snake/input.in", "r", stdin); // debug only
+    // #endif
+    // ios::sync_with_stdio(false);
     cin.tie(nullptr);
 
     read_state(global_state);
     auto choice = decide(global_state);
     cout << choice.action << "\n";
-    cout << str_info << "\n";
+    // cout << str_info << "\n";
     return 0;
 }
